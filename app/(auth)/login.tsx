@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -32,6 +32,11 @@ export default function LoginScreen() {
 
   return (
     <Screen scroll>
+      <View style={styles.hero}>
+        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Welcome back</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>Sign in to sync your finances.</Text>
+      </View>
       <Controller
         control={form.control}
         name="email"
@@ -63,7 +68,7 @@ export default function LoginScreen() {
         <Text style={[styles.link, { color: colors.primary }]}>Forgot password?</Text>
       </Pressable>
       <Button
-        title={syncing ? 'Downloading your data...' : 'Log In'}
+        title={syncing ? 'Downloading your data...' : 'Sign in'}
         loading={submitting}
         onPress={form.handleSubmit(async (values) => {
           setSubmitting(true);
@@ -81,10 +86,20 @@ export default function LoginScreen() {
           }
         })}
       />
+      <Pressable onPress={() => router.push('/(auth)/signup')}>
+        <Text style={[styles.switch, { color: colors.textSecondary }]}>
+          New here? <Text style={{ color: colors.primary, fontWeight: '700' }}>Create account</Text>
+        </Text>
+      </Pressable>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  hero: { marginBottom: 20, gap: 6 },
+  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
+  copy: { fontSize: 15, lineHeight: 22 },
   link: { fontWeight: '700', marginVertical: 8 },
+  switch: { textAlign: 'center', marginTop: 16 },
 });

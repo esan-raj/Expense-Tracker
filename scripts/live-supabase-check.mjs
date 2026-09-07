@@ -291,6 +291,98 @@ async function main() {
     record('account_transfer', 'Passed', 'linked source + destination');
   }
 
+  const invId = randomUUID();
+  const missingInvestments = /could not find the table|schema cache|does not exist|PGRST205/i;
+  const invIns = await loginA.from('investments').upsert({
+    id: invId,
+    user_id: sessionA.user.id,
+    name: 'Nifty Index Fund',
+    type: 'mutual_fund',
+    invested_amount: 10000000,
+    current_value: 11250000,
+    investment_date: '2026-01-15',
+    account_id: bankId,
+    notes: 'first',
+    created_at: now,
+    updated_at: now,
+  });
+  if (invIns.error && missingInvestments.test(invIns.error.message)) {
+    record('investment_create', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (invIns.error) {
+    record('investment_create', 'Failed', invIns.error.message);
+  } else {
+    const created = await loginA.from('investments').select('id,name,invested_amount,current_value,account_id').eq('id', invId).single();
+    if (
+      created.data?.name === 'Nifty Index Fund' &&
+      created.data.invested_amount === 10000000 &&
+      created.data.current_value === 11250000 &&
+      created.data.account_id === bankId
+    ) {
+      record('investment_create', 'Passed', invId);
+    } else {
+      record('investment_create', 'Failed', created.error?.message ?? 'row missing or fields not returned');
+    }
+  }
+
+  const invRead = await loginA.from('investments').select('id,name,user_id').eq('id', invId);
+  if (invRead.error && missingInvestments.test(invRead.error.message)) {
+    record('investment_read', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (invRead.error) {
+    record('investment_read', 'Failed', invRead.error.message);
+  } else if ((invRead.data ?? []).length === 1 && invRead.data[0].user_id === sessionA.user.id) {
+    record('investment_read', 'Passed', 'User A can read own investment');
+  } else {
+    record('investment_read', 'Failed', `rows=${invRead.data?.length ?? 0}`);
+  }
+
+  const invUpd = await loginA
+    .from('investments')
+    .update({ name: 'Nifty Index Fund edited', current_value: 12000000, notes: 'updated' })
+    .eq('id', invId);
+  if (invUpd.error && missingInvestments.test(invUpd.error.message)) {
+    record('investment_update', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (invUpd.error) {
+    record('investment_update', 'Failed', invUpd.error.message);
+  } else {
+    const invRow = await loginA.from('investments').select('id,name,current_value,updated_at').eq('id', invId).single();
+    if (invRow.data?.name === 'Nifty Index Fund edited' && invRow.data.current_value === 12000000) {
+      record('investment_update', 'Passed', 'same id, current_value updated');
+    } else {
+      record('investment_update', 'Failed', 'row missing or fields not updated');
+    }
+  }
+
+  const invSoft = await loginA.from('investments').update({ deleted_at: new Date().toISOString() }).eq('id', invId);
+  if (invSoft.error && missingInvestments.test(invSoft.error.message)) {
+    record('investment_soft_delete', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (invSoft.error) {
+    record('investment_soft_delete', 'Failed', invSoft.error.message);
+  } else {
+    const gone = await loginA.from('investments').select('id,deleted_at').eq('id', invId).single();
+    record(gone.data?.deleted_at ? 'investment_soft_delete' : 'investment_soft_delete', gone.data?.deleted_at ? 'Passed' : 'Failed', 'soft delete');
+  }
+
+  const invUpsertAgain = await loginA.from('investments').upsert({
+    id: invId,
+    user_id: sessionA.user.id,
+    name: 'Nifty Index Fund edited',
+    type: 'mutual_fund',
+    invested_amount: 10000000,
+    current_value: 12000000,
+    investment_date: '2026-01-15',
+    account_id: bankId,
+    notes: 'retry',
+    deleted_at: new Date().toISOString(),
+  });
+  const invCount = await loginA.from('investments').select('id', { count: 'exact', head: true }).eq('id', invId);
+  if (invUpsertAgain.error && missingInvestments.test(invUpsertAgain.error.message)) {
+    record('investment_upsert_idempotent', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (invUpsertAgain.error || invCount.count !== 1) {
+    record('investment_upsert_idempotent', 'Failed', invUpsertAgain.error?.message ?? `count=${invCount.count}`);
+  } else {
+    record('investment_upsert_idempotent', 'Passed', 'same UUID did not duplicate');
+  }
+
   const soft = await loginA.from('transactions').update({ deleted_at: new Date().toISOString() }).eq('id', txId);
   if (soft.error) record('online_delete', 'Failed', soft.error.message);
   else {
@@ -398,6 +490,42 @@ async function main() {
     record('account_rls_via_transaction', 'Failed', 'apply supabase/migrations/005_accounts.sql');
   } else if (hijackTx.error) record('account_rls_via_transaction', 'Passed', 'cannot attach User A account');
   else record('account_rls_via_transaction', 'Failed', 'User B wrote a transaction against User A account');
+
+  const bInvestments = await b.from('investments').select('id,name').eq('id', invId);
+  if (bInvestments.error && missingInvestments.test(bInvestments.error.message)) {
+    record('investment_rls_select', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (bInvestments.error) record('investment_rls_select', 'Failed', bInvestments.error.message);
+  else if ((bInvestments.data ?? []).length === 0) record('investment_rls_select', 'Passed', 'User B sees 0 of User A investments');
+  else record('investment_rls_select', 'Failed', `User B saw ${bInvestments.data.length} of User A investments`);
+
+  const stealInv = await b.from('investments').update({ name: 'stolen' }).eq('id', invId).select();
+  if (stealInv.error && missingInvestments.test(stealInv.error.message)) {
+    record('investment_rls_update', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (stealInv.error) record('investment_rls_update', 'Passed', 'update denied or errored');
+  else if ((stealInv.data ?? []).length === 0) record('investment_rls_update', 'Passed', '0 matching rows');
+  else record('investment_rls_update', 'Failed', 'User B updated User A investment');
+
+  const stealInvDel = await b.from('investments').delete().eq('id', invId).select();
+  if (stealInvDel.error && missingInvestments.test(stealInvDel.error.message)) {
+    record('investment_rls_delete', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (stealInvDel.error) record('investment_rls_delete', 'Passed', 'delete denied or errored');
+  else if ((stealInvDel.data ?? []).length === 0) record('investment_rls_delete', 'Passed', '0 matching rows');
+  else record('investment_rls_delete', 'Failed', 'User B deleted User A investment');
+
+  const hijackInv = await b.from('investments').insert({
+    id: randomUUID(),
+    user_id: signUpB.data.session.user.id,
+    name: 'bypass',
+    type: 'stocks',
+    invested_amount: 100,
+    current_value: 100,
+    investment_date: '2026-01-01',
+    account_id: bankId,
+  });
+  if (hijackInv.error && missingInvestments.test(hijackInv.error.message)) {
+    record('investment_rls_via_account', 'Failed', 'apply supabase/migrations/007_create_investments.sql');
+  } else if (hijackInv.error) record('investment_rls_via_account', 'Passed', 'cannot attach User A account');
+  else record('investment_rls_via_account', 'Failed', 'User B wrote an investment against User A account');
 
   await loginA.auth.signOut();
   const afterOut = await loginA.auth.getSession();

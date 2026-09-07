@@ -9,7 +9,8 @@ import { toUserMessage } from '@/utils/errors';
 
 export default function EditCategoryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const category = useCategoryStore((state) => state.categories.find((item) => item.id === id));
+  const categories = useCategoryStore((state) => state.categories);
+  const category = categories.find((item) => item.id === id);
   const update = useCategoryStore((state) => state.update);
   const [submitting, setSubmitting] = useState(false);
 

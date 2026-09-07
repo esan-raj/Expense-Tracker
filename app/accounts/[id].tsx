@@ -1,22 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { Card } from '@/components/ui/Card';
 import { AccountForm } from '@/components/forms/AccountForm';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { Amount } from '@/components/ui/Amount';
+import { DonutChart } from '@/components/charts/DonutChart';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
-import { formatMoney } from '@/utils/currency';
-import { isLiabilityAccount } from '@/utils/accountLogic';
+import { accountOverviewSlices, isLiabilityAccount } from '@/utils/accountLogic';
 import { toUserMessage } from '@/utils/errors';
 import { useTheme } from '@/hooks/useTheme';
 import { transactionService } from '@/services/transactionService';
 import { useTransactionStore } from '@/store/useTransactionStore';
 import { TransactionRow } from '@/components/transactions/TransactionRow';
+import { SectionHeader } from '@/components/ui/SectionHeader';
 import type { AccountWithBalances, TransactionWithCategory } from '@/types';
 
 export default function AccountDetailScreen() {
@@ -30,6 +32,7 @@ export default function AccountDetailScreen() {
   const remove = useAccountStore((state) => state.remove);
   const accounts = useAccountStore((state) => state.accounts);
   const [confirm, setConfirm] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activity, setActivity] = useState<TransactionWithCategory[]>([]);
   const setQuery = useTransactionStore((state) => state.setQuery);
@@ -46,38 +49,54 @@ export default function AccountDetailScreen() {
   }, [id]);
 
   const item = accounts.find((entry) => entry.id === id) as AccountWithBalances | undefined;
-  if (!accounts.length) return <LoadingState />;
+  if (!accounts.length) return <ScreenSkeleton variant="detail" />;
   if (!item) return <ErrorState message="This account could not be found." />;
+
+  const liability = isLiabilityAccount(item.type);
+  const slices = accountOverviewSlices(item, item.expenditure);
 
   return (
     <Screen scroll>
       <Card>
-        {isLiabilityAccount(item.type) ? (
-          <>
+        {liability ? (
+          <View style={styles.hero}>
             <Text style={[styles.label, { color: colors.textSecondary }]}>Outstanding</Text>
-            <Text style={[styles.value, { color: colors.textPrimary }]}>{formatMoney(item.outstanding, currency)}</Text>
+            <Amount minor={item.outstanding} currency={currency} size="hero" />
             {item.creditLimit != null ? (
               <>
-                <Text style={[styles.label, { color: colors.textSecondary }]}>Credit limit</Text>
-                <Text style={[styles.value, { color: colors.textPrimary }]}>{formatMoney(item.creditLimit, currency)}</Text>
-                <Text style={[styles.label, { color: colors.textSecondary }]}>Available credit</Text>
-                <Text style={[styles.value, { color: colors.textPrimary }]}>
-                  {formatMoney(item.availableCredit ?? 0, currency)}
-                </Text>
+                <DonutChart
+                  size={140}
+                  centerLabel="Used"
+                  centerValue={slices.used}
+                  slices={[
+                    { label: 'Used', amount: slices.used, color: colors.expense },
+                    { label: 'Available', amount: slices.remaining, color: colors.income },
+                  ]}
+                />
+                <View style={styles.stats}>
+                  <Stat label="Credit limit" value={item.creditLimit} currency={currency} />
+                  <Stat label="Available" value={item.availableCredit ?? 0} currency={currency} />
+                  {item.utilizationPercent != null ? (
+                    <View style={styles.stat}>
+                      <Text style={[styles.label, { color: colors.textSecondary }]}>Utilization</Text>
+                      <Text style={[styles.statValue, { color: colors.textPrimary }]}>{item.utilizationPercent.toFixed(2)}%</Text>
+                    </View>
+                  ) : null}
+                </View>
               </>
             ) : null}
-          </>
+          </View>
         ) : (
           <>
-            <Text style={[styles.label, { color: colors.textSecondary }]}>Balance</Text>
-            <Text style={[styles.value, { color: colors.textPrimary }]}>{formatMoney(item.currentBalance, currency)}</Text>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Current balance</Text>
+            <Amount minor={item.currentBalance} currency={currency} size="hero" />
           </>
         )}
-        {!item.isActive ? <Text style={{ color: colors.textSecondary }}>Archived — hidden from new transactions.</Text> : null}
+        {!item.isActive ? <Text style={{ color: colors.textSecondary, marginTop: 8 }}>Archived — hidden from new transactions.</Text> : null}
       </Card>
       {activity.length > 0 ? (
         <Card>
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Recent activity</Text>
+          <SectionHeader title="Recent activity" />
           {activity.map((entry) => (
             <TransactionRow key={entry.id} item={entry} onPress={() => router.push(`/transaction/${entry.id}`)} />
           ))}
@@ -97,32 +116,35 @@ export default function AccountDetailScreen() {
           </Text>
         </Card>
       )}
-      <AccountForm
-        initial={item}
-        submitting={submitting}
-        onSubmit={async (values) => {
-          setSubmitting(true);
-          try {
-            await update(item.id, {
-              type: values.type,
-              name: values.name,
-              institutionName: values.institutionName,
-              currency: item.currency,
-              openingBalance: values.openingMinor,
-              creditLimit: values.limitMinor,
-              isActive: item.isActive,
-            });
-            router.back();
-          } catch (error) {
-            Alert.alert('Could not save', toUserMessage(error, 'Please try again.'));
-          } finally {
-            setSubmitting(false);
-          }
-        }}
-      />
+      <Button title={showEdit ? 'Hide account settings' : 'Edit account'} variant="secondary" onPress={() => setShowEdit((value) => !value)} />
+      {showEdit ? (
+        <AccountForm
+          initial={item}
+          submitting={submitting}
+          onSubmit={async (values) => {
+            setSubmitting(true);
+            try {
+              await update(item.id, {
+                type: values.type,
+                name: values.name,
+                institutionName: values.institutionName,
+                currency: item.currency,
+                openingBalance: values.openingMinor,
+                creditLimit: values.limitMinor,
+                isActive: item.isActive,
+              });
+              router.back();
+            } catch (error) {
+              Alert.alert('Could not save', toUserMessage(error, 'Please try again.'));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        />
+      ) : null}
       <Button
         title={item.isActive ? 'Archive account' : 'Reactivate account'}
-        variant="secondary"
+        variant="ghost"
         onPress={async () => {
           if (item.isActive) await archive(item.id);
           else await reactivate(item.id);
@@ -147,7 +169,20 @@ export default function AccountDetailScreen() {
   );
 }
 
+function Stat({ label, value, currency }: { label: string; value: number; currency: AccountWithBalances['currency'] }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.stat}>
+      <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
+      <Amount minor={value} currency={currency} size="sm" />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  label: { fontSize: 13, fontWeight: '600', marginTop: 8 },
-  value: { fontSize: 22, fontWeight: '800' },
+  hero: { alignItems: 'center', gap: 8 },
+  label: { fontSize: 13, fontWeight: '600' },
+  stats: { width: '100%', gap: 10, marginTop: 8 },
+  stat: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  statValue: { fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
 });

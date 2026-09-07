@@ -4,7 +4,8 @@ export type SyncEntityType =
   | 'budget'
   | 'recurring'
   | 'profile'
-  | 'account';
+  | 'account'
+  | 'investment';
 
 export type SyncOperation = 'create' | 'update' | 'delete';
 

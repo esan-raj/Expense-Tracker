@@ -1,4 +1,4 @@
-import type { Account, AppSettings, Budget, Category, RecurringTransaction, Transaction } from '@/types';
+import type { Account, AppSettings, Budget, Category, Investment, RecurringTransaction, Transaction } from '@/types';
 
 export interface RemoteTransaction {
   id: string;
@@ -272,6 +272,55 @@ export function fromRemoteRecurring(
     paymentMethod: row.payment_method ?? 'other',
     isActive: row.is_active,
     accountId: row.account_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    userId: row.user_id,
+  };
+}
+
+export interface RemoteInvestment {
+  id: string;
+  user_id: string;
+  name: string;
+  type: Investment['type'];
+  invested_amount: number;
+  current_value: number;
+  investment_date: string;
+  account_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export function toRemoteInvestment(item: Investment, userId: string): RemoteInvestment {
+  return {
+    id: item.id,
+    user_id: userId,
+    name: item.name,
+    type: item.type,
+    invested_amount: item.investedAmount,
+    current_value: item.currentValue,
+    investment_date: item.investmentDate,
+    account_id: item.accountId || null,
+    notes: item.notes || null,
+    created_at: item.createdAt,
+    updated_at: item.updatedAt,
+    deleted_at: item.deletedAt || null,
+  };
+}
+
+export function fromRemoteInvestment(row: RemoteInvestment): Investment & { userId: string } {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    investedAmount: row.invested_amount,
+    currentValue: row.current_value,
+    investmentDate: dateOnly(row.investment_date),
+    accountId: row.account_id,
+    notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,

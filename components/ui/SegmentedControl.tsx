@@ -17,7 +17,7 @@ interface SegmentedControlProps<T extends string> {
 export function SegmentedControl<T extends string>({ value, options, onChange }: SegmentedControlProps<T>) {
   const { colors } = useTheme();
   return (
-    <View style={[styles.track, { backgroundColor: colors.primaryMuted }]} accessibilityRole="tablist">
+    <View style={[styles.track, { backgroundColor: colors.surfaceSecondary }]} accessibilityRole="tablist">
       {options.map((option) => {
         const selected = option.value === value;
         return (

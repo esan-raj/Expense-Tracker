@@ -1,11 +1,11 @@
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import { Amount } from '@/components/ui/Amount';
 import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { formatMoney } from '@/utils/currency';
 import { formatShortDate } from '@/utils/dates';
-import { paymentMethodLabel } from '@/utils/constants';
 import type { TransactionWithCategory } from '@/types';
 
 interface TransactionRowProps {
@@ -16,33 +16,42 @@ interface TransactionRowProps {
 function TransactionRowComponent({ item, onPress }: TransactionRowProps) {
   const { colors } = useTheme();
   const currency = useSettingsStore((state) => state.settings.currency);
-  const amountColor = item.type === 'income' ? colors.income : colors.expense;
+  const transfer = item.isTransfer;
+  const type = transfer ? 'transfer' : item.type;
+  const amountLabel = transfer
+    ? formatMoney(item.amount, currency)
+    : formatMoney(item.amount, currency, { type: item.type });
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${item.title}, ${item.type} ${formatMoney(item.amount, currency, { type: item.type })}`}
+      accessibilityLabel={`${item.title}, ${transfer ? 'transfer' : item.type} ${amountLabel}`}
       style={({ pressed }) => [styles.row, { opacity: pressed ? 0.72 : 1 }]}
     >
       <CategoryIcon
-        icon={item.isTransfer ? 'swap-horizontal' : item.categoryIcon}
-        color={item.isTransfer ? '#64748B' : item.categoryColor}
+        icon={transfer ? 'swap-horizontal' : item.categoryIcon}
+        color={transfer ? colors.transfer : item.categoryColor}
       />
       <View style={styles.body}>
         <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>
           {item.title}
         </Text>
         <Text style={[styles.meta, { color: colors.textSecondary }]} numberOfLines={1}>
-          {item.isTransfer ? 'Transfer' : item.categoryName}
-          {item.accountName ? ` · ${item.accountName}` : item.accountId ? '' : ' · No account'}
-          {item.isTransfer ? '' : ` · ${paymentMethodLabel(item.paymentMethod)}`}
-          {` · ${formatShortDate(item.date)}`}
+          {transfer ? 'Transfer' : item.categoryName}
+          {item.accountName ? ` · ${item.accountName}` : ''}
         </Text>
       </View>
-      <Text style={[styles.amount, { color: amountColor }]}>
-        {formatMoney(item.amount, currency, { type: item.type })}
-      </Text>
+      <View style={styles.right}>
+        <Amount
+          minor={item.amount}
+          currency={currency}
+          type={type}
+          size="sm"
+          style={styles.amount}
+        />
+        <Text style={[styles.date, { color: colors.textTertiary }]}>{formatShortDate(item.date)}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -50,9 +59,11 @@ function TransactionRowComponent({ item, onPress }: TransactionRowProps) {
 export const TransactionRow = memo(TransactionRowComponent);
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 64, paddingVertical: 10 },
   body: { flex: 1, minWidth: 0 },
   title: { fontSize: 16, fontWeight: '600' },
   meta: { fontSize: 13, marginTop: 2 },
-  amount: { fontSize: 16, fontWeight: '700' },
+  right: { alignItems: 'flex-end' },
+  amount: { fontSize: 16 },
+  date: { fontSize: 12, marginTop: 2, fontWeight: '600' },
 });

@@ -3,7 +3,7 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@/hooks/useTheme';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
-import { spacing } from '@/constants/theme';
+import { contentMaxWidth, spacing } from '@/constants/theme';
 
 interface ScreenProps {
   children: ReactNode;
@@ -47,5 +47,5 @@ const styles = StyleSheet.create({
   body: { flex: 1, minHeight: 0 },
   scrollBody: { flexGrow: 1 },
   padded: { paddingHorizontal: spacing.lg },
-  desktop: { paddingHorizontal: 28, maxWidth: 1200, width: '100%', alignSelf: 'center' },
+  desktop: { paddingHorizontal: 28, maxWidth: contentMaxWidth, width: '100%', alignSelf: 'center' },
 });

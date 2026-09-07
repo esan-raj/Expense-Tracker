@@ -13,12 +13,12 @@ export default function WelcomeAuthScreen() {
     <Screen>
       <View style={styles.content}>
         <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>Take control of your money.</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
         <Text style={[styles.copy, { color: colors.textSecondary }]}>
           Sign in to sync across devices. Everything still works on this phone when you are offline.
         </Text>
-        <Button title="Get Started" onPress={() => router.push('/(auth)/signup')} />
-        <Button title="Log In" variant="secondary" onPress={() => router.push('/(auth)/login')} />
+        <Button title="Create account" onPress={() => router.push('/(auth)/signup')} />
+        <Button title="Sign in" variant="secondary" onPress={() => router.push('/(auth)/login')} />
         {onboardingComplete ? (
           <Button title="Continue offline" variant="ghost" onPress={() => router.replace('/(tabs)')} />
         ) : (
@@ -31,7 +31,7 @@ export default function WelcomeAuthScreen() {
 
 const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: 'center', gap: 16 },
-  brand: { fontSize: 16, fontWeight: '800', letterSpacing: 1 },
+  brand: { fontSize: 15, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
   title: { fontSize: 34, fontWeight: '800', letterSpacing: -0.8, lineHeight: 40 },
   copy: { fontSize: 16, lineHeight: 24, marginBottom: 8 },
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Text } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Screen } from '@/components/ui/Screen';
@@ -23,9 +23,13 @@ export default function ForgotPasswordScreen() {
 
   return (
     <Screen scroll>
-      <Text style={{ color: colors.textSecondary, marginBottom: 16, lineHeight: 22 }}>
-        Enter your email and we will send a reset link. You can keep using SpendWise offline in the meantime.
-      </Text>
+      <View style={styles.hero}>
+        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Reset password</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>
+          Enter your email and we will send a reset link. You can keep using SpendWise offline in the meantime.
+        </Text>
+      </View>
       <Controller
         control={form.control}
         name="email"
@@ -58,3 +62,10 @@ export default function ForgotPasswordScreen() {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  hero: { marginBottom: 20, gap: 6 },
+  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
+  copy: { fontSize: 15, lineHeight: 22 },
+});

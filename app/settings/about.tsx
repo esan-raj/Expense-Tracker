@@ -8,13 +8,13 @@ export default function AboutScreen() {
   const { colors } = useTheme();
   return (
     <Screen scroll>
-      <Card>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>{APP_NAME}</Text>
+      <Card elevated={false}>
+        <Text style={[styles.brand, { color: colors.primary }]}>{APP_NAME}</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
         <Text style={{ color: colors.textSecondary, marginBottom: 12 }}>Version {APP_VERSION}</Text>
         <Text style={{ color: colors.textPrimary, lineHeight: 24 }}>
           SpendWise is a private, offline-first expense tracker. It helps you record income and spending,
-          stay inside monthly budgets, and understand where your money goes — without sending financial
-          data to a server.
+          stay inside monthly budgets, and understand where your money goes.
         </Text>
       </Card>
     </Screen>
@@ -22,5 +22,6 @@ export default function AboutScreen() {
 }
 
 const styles = StyleSheet.create({
-  title: { fontSize: 28, fontWeight: '800', marginBottom: 4 },
+  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 8 },
+  title: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5, marginBottom: 8 },
 });

@@ -31,9 +31,9 @@ export function Button({
     ghost: 'transparent',
   }[variant];
   const textColor = {
-    primary: '#FFFFFF',
+    primary: colors.onPrimary,
     secondary: colors.primary,
-    danger: '#FFFFFF',
+    danger: colors.onPrimary,
     ghost: colors.primary,
   }[variant];
 
@@ -48,7 +48,12 @@ export function Button({
       accessibilityLabel={accessibilityLabel ?? title}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: background, opacity: disabled ? 0.5 : pressed ? 0.86 : 1 },
+        {
+          backgroundColor: background,
+          borderColor: variant === 'ghost' ? colors.border : 'transparent',
+          borderWidth: variant === 'ghost' ? 1 : 0,
+          opacity: disabled ? 0.5 : pressed ? 0.86 : 1,
+        },
       ]}
     >
       {loading ? (

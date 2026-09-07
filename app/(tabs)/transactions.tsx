@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SectionList, StyleSheet, Text, View } from 'react-native';
+import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { PageScroll } from '@/components/ui/PageScroll';
 import { Input } from '@/components/ui/Input';
-import { SegmentedControl } from '@/components/ui/SegmentedControl';
+import { ChipRow } from '@/components/ui/Chip';
 import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { TransactionRow } from '@/components/transactions/TransactionRow';
 import { TransactionTable } from '@/components/transactions/TransactionTable';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
@@ -23,7 +25,10 @@ import { getGroupLabel } from '@/utils/dates';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { PAYMENT_METHODS, SEARCH_DEBOUNCE_MS, SORT_OPTIONS } from '@/utils/constants';
 import { getDateRange, rangeToKeys, todayKey, type DateRangePreset } from '@/utils/dates';
-import type { PaymentMethod, TransactionSort, TransactionType } from '@/types';
+import { spacing } from '@/constants/theme';
+import type { PaymentMethod, TransactionSort } from '@/types';
+
+type KindFilter = 'all' | 'expense' | 'income' | 'transfer' | 'investment';
 
 export default function TransactionsScreen() {
   const { colors } = useTheme();
@@ -35,7 +40,12 @@ export default function TransactionsScreen() {
   const [datePreset, setDatePreset] = useState<'all' | DateRangePreset>('all');
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
+  const [kind, setKind] = useState<KindFilter>('all');
+  const [showFilters, setShowFilters] = useState(false);
   const currency = useSettingsStore((state) => getCurrency(state.settings.currency));
+  const investmentCategoryIds = categories
+    .filter((item) => /invest|mutual|sip/i.test(item.name))
+    .map((item) => item.id);
 
   useEffect(() => {
     void load();
@@ -47,6 +57,25 @@ export default function TransactionsScreen() {
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [search]);
+
+  const applyKind = (next: KindFilter) => {
+    setKind(next);
+    if (next === 'transfer') {
+      void setQuery({ filters: { type: 'all', isTransfer: true, categoryIds: undefined } });
+      return;
+    }
+    if (next === 'investment') {
+      void setQuery({ filters: { type: 'all', isTransfer: undefined, categoryIds: investmentCategoryIds } });
+      return;
+    }
+    void setQuery({
+      filters: {
+        type: next,
+        isTransfer: undefined,
+        categoryIds: undefined,
+      },
+    });
+  };
 
   const sections = useMemo(() => {
     const groups = new Map<string, typeof items>();
@@ -60,33 +89,51 @@ export default function TransactionsScreen() {
 
   const header = (
     <View style={styles.header}>
-      <Text style={[styles.title, { color: colors.textPrimary }]}>Transactions</Text>
-      <Input value={search} onChangeText={setSearch} placeholder="Search transactions..." />
-      <SegmentedControl
-        value={(query.filters?.type ?? 'all') as 'all' | TransactionType}
-        onChange={(type) => void setQuery({ filters: { type } })}
+      <PageHeader
+        title="Transactions"
+        action={
+          <Pressable
+            onPress={() => setShowFilters((value) => !value)}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle filters"
+            style={[styles.filterBtn, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}
+          >
+            <Ionicons name="filter" size={18} color={colors.textPrimary} />
+          </Pressable>
+        }
+      />
+      <Input value={search} onChangeText={setSearch} placeholder="Search" />
+      <ChipRow
+        value={kind}
+        onChange={applyKind}
         options={[
           { value: 'all', label: 'All' },
           { value: 'expense', label: 'Expenses' },
           { value: 'income', label: 'Income' },
+          { value: 'transfer', label: 'Transfers' },
+          { value: 'investment', label: 'Investments' },
         ]}
       />
-      <View style={styles.filters}>
-        <View style={styles.flex}>
-          <Select
-            label="Account"
-            value={query.filters?.accountId ?? 'all'}
-            options={[{ value: 'all', label: 'All accounts' }, ...accounts.map((item) => ({ value: item.id, label: item.name }))]}
-            onChange={(value) => void setQuery({ filters: { accountId: value === 'all' ? undefined : value } })}
-          />
-          <Select
-            label="Category"
-            value={query.filters?.categoryId ?? 'all'}
-            options={[{ value: 'all', label: 'All categories' }, ...categories.map((item) => ({ value: item.id, label: item.name }))]}
-            onChange={(value) => void setQuery({ filters: { categoryId: value === 'all' ? undefined : value } })}
-          />
-        </View>
-        <View style={styles.flex}>
+      {showFilters ? (
+        <>
+          <View style={styles.filters}>
+            <View style={styles.flex}>
+              <Select
+                label="Account"
+                value={query.filters?.accountId ?? 'all'}
+                options={[{ value: 'all', label: 'All accounts' }, ...accounts.map((item) => ({ value: item.id, label: item.name }))]}
+                onChange={(value) => void setQuery({ filters: { accountId: value === 'all' ? undefined : value } })}
+              />
+            </View>
+            <View style={styles.flex}>
+              <Select
+                label="Category"
+                value={query.filters?.categoryId ?? 'all'}
+                options={[{ value: 'all', label: 'All categories' }, ...categories.map((item) => ({ value: item.id, label: item.name }))]}
+                onChange={(value) => void setQuery({ filters: { categoryId: value === 'all' ? undefined : value } })}
+              />
+            </View>
+          </View>
           <Select
             label="Payment"
             value={query.filters?.paymentMethod ?? 'all'}
@@ -95,99 +142,99 @@ export default function TransactionsScreen() {
               void setQuery({ filters: { paymentMethod: value === 'all' ? undefined : (value as PaymentMethod) } })
             }
           />
-        </View>
-      </View>
-      <Select
-        label="Date range"
-        value={datePreset}
-        options={[
-          { value: 'all', label: 'All time' },
-          { value: 'this_month', label: 'This month' },
-          { value: 'last_month', label: 'Last month' },
-          { value: 'custom', label: 'Custom' },
-        ]}
-        onChange={(value) => {
-          const next = value as 'all' | DateRangePreset;
-          setDatePreset(next);
-          if (next === 'all') {
-            void setQuery({ filters: { startDate: undefined, endDate: undefined } });
-            return;
-          }
-          if (next !== 'custom') {
-            const keys = rangeToKeys(getDateRange(next));
-            void setQuery({ filters: keys });
-          }
-        }}
-      />
-      {datePreset === 'custom' ? (
-        <View style={styles.filters}>
-          <View style={styles.flex}>
-            <DatePicker
-              label="From"
-              value={query.filters?.startDate ?? todayKey()}
-              onChange={(value) => void setQuery({ filters: { startDate: value } })}
-            />
+          <Select
+            label="Date range"
+            value={datePreset}
+            options={[
+              { value: 'all', label: 'All time' },
+              { value: 'this_month', label: 'This month' },
+              { value: 'last_month', label: 'Last month' },
+              { value: 'custom', label: 'Custom' },
+            ]}
+            onChange={(value) => {
+              const next = value as 'all' | DateRangePreset;
+              setDatePreset(next);
+              if (next === 'all') {
+                void setQuery({ filters: { startDate: undefined, endDate: undefined } });
+                return;
+              }
+              if (next !== 'custom') {
+                const keys = rangeToKeys(getDateRange(next));
+                void setQuery({ filters: keys });
+              }
+            }}
+          />
+          {datePreset === 'custom' ? (
+            <View style={styles.filters}>
+              <View style={styles.flex}>
+                <DatePicker
+                  label="From"
+                  value={query.filters?.startDate ?? todayKey()}
+                  onChange={(value) => void setQuery({ filters: { startDate: value } })}
+                />
+              </View>
+              <View style={styles.flex}>
+                <DatePicker
+                  label="To"
+                  value={query.filters?.endDate ?? todayKey()}
+                  onChange={(value) => void setQuery({ filters: { endDate: value } })}
+                />
+              </View>
+            </View>
+          ) : null}
+          <View style={styles.filters}>
+            <View style={styles.flex}>
+              <Input
+                label="Min amount"
+                value={minAmount}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                onChangeText={(value) => {
+                  setMinAmount(value);
+                  const parsed = parseAmountInput(value);
+                  void setQuery({
+                    filters: { minAmount: parsed ? toMinorUnits(parsed, currency.decimals) : undefined },
+                  });
+                }}
+              />
+            </View>
+            <View style={styles.flex}>
+              <Input
+                label="Max amount"
+                value={maxAmount}
+                keyboardType="decimal-pad"
+                placeholder="Any"
+                onChangeText={(value) => {
+                  setMaxAmount(value);
+                  const parsed = parseAmountInput(value);
+                  void setQuery({
+                    filters: { maxAmount: parsed ? toMinorUnits(parsed, currency.decimals) : undefined },
+                  });
+                }}
+              />
+            </View>
           </View>
-          <View style={styles.flex}>
-            <DatePicker
-              label="To"
-              value={query.filters?.endDate ?? todayKey()}
-              onChange={(value) => void setQuery({ filters: { endDate: value } })}
-            />
-          </View>
-        </View>
+          <Select
+            label="Sort"
+            value={query.sort ?? 'newest'}
+            options={SORT_OPTIONS}
+            onChange={(value) => void setQuery({ sort: value as TransactionSort })}
+          />
+        </>
       ) : null}
-      <View style={styles.filters}>
-        <View style={styles.flex}>
-          <Input
-            label="Min amount"
-            value={minAmount}
-            keyboardType="decimal-pad"
-            placeholder="0"
-            onChangeText={(value) => {
-              setMinAmount(value);
-              const parsed = parseAmountInput(value);
-              void setQuery({
-                filters: { minAmount: parsed ? toMinorUnits(parsed, currency.decimals) : undefined },
-              });
-            }}
-          />
-        </View>
-        <View style={styles.flex}>
-          <Input
-            label="Max amount"
-            value={maxAmount}
-            keyboardType="decimal-pad"
-            placeholder="Any"
-            onChangeText={(value) => {
-              setMaxAmount(value);
-              const parsed = parseAmountInput(value);
-              void setQuery({
-                filters: { maxAmount: parsed ? toMinorUnits(parsed, currency.decimals) : undefined },
-              });
-            }}
-          />
-        </View>
-      </View>
-      <Select
-        label="Sort"
-        value={query.sort ?? 'newest'}
-        options={SORT_OPTIONS}
-        onChange={(value) => void setQuery({ sort: value as TransactionSort })}
-      />
     </View>
   );
 
   const empty =
     loading && items.length === 0 ? (
-      <LoadingState />
+      <ScreenSkeleton variant="list" />
     ) : error && items.length === 0 ? (
       <ErrorState message={error} onRetry={() => void load()} />
     ) : !loading && items.length === 0 ? (
       <EmptyState
         title="No transactions yet"
-        message="Start tracking your spending by adding your first transaction."
-        actionLabel="+ Add Transaction"
+        message="Your recent transactions will appear here."
+        actionLabel="+ Add transaction"
         onAction={() => router.push('/transaction/add')}
       />
     ) : null;
@@ -238,9 +285,9 @@ export default function TransactionsScreen() {
 const styles = StyleSheet.create({
   scroller: { flex: 1, minHeight: 0 },
   header: { paddingTop: 8, gap: 12 },
-  title: { fontSize: 28, fontWeight: '800' },
   filters: { flexDirection: 'row', gap: 12 },
   flex: { flex: 1 },
-  list: { paddingHorizontal: 16, paddingBottom: 32, flexGrow: 1 },
+  list: { paddingHorizontal: spacing.lg, paddingBottom: 32, flexGrow: 1 },
   section: { fontSize: 12, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase', paddingVertical: 10 },
+  filterBtn: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
 });

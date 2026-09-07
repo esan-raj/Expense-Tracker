@@ -147,6 +147,8 @@ export async function migrateJsonSnapshot(db: SpendWiseDatabase): Promise<void> 
         currency: text(settings.currency),
         currencySymbol: text(settings.currencySymbol),
         theme: text(settings.theme || 'system'),
+        accentPreset: text((settings.accentPreset as string) || 'emerald'),
+        accentColor: text((settings.accentColor as string) || '#0E7C66'),
         firstDayOfWeek: numberValue(settings.firstDayOfWeek, 1),
         monthlyBudget: numberValue(settings.monthlyBudget),
         onboardingComplete: flag(settings.onboardingComplete),

@@ -2,7 +2,8 @@ import { accountRepository } from '@/database/repositories/accountRepository';
 import { transactionRepository } from '@/database/repositories/transactionRepository';
 import { queueChange } from '@/services/outbox';
 import type { Account, AccountInput, AccountWithBalances } from '@/types';
-import { calculateAccountBalances } from '@/utils/accountLogic';
+import { calculateAccountBalances, calculateAssetExpenditure, getCreditCardSummary, isLiabilityAccount } from '@/utils/accountLogic';
+import { accountBalanceSeries } from '@/utils/accountSeries';
 import { AppError, logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
 
@@ -12,18 +13,22 @@ async function withBalances(account: Account): Promise<AccountWithBalances> {
     limit: 10000,
     offset: 0,
   });
+  const entries = txs.map((item) => ({
+    type: item.type,
+    amount: item.amount,
+    accountId: item.accountId,
+    isTransfer: item.isTransfer,
+    transferRole: item.transferRole,
+    date: item.date,
+  }));
+  const balances = calculateAccountBalances(account, entries);
+  const card = isLiabilityAccount(account.type) ? getCreditCardSummary(account, entries) : null;
   return {
     ...account,
-    ...calculateAccountBalances(
-      account,
-      txs.map((item) => ({
-        type: item.type,
-        amount: item.amount,
-        accountId: item.accountId,
-        isTransfer: item.isTransfer,
-        transferRole: item.transferRole,
-      }))
-    ),
+    ...balances,
+    expenditure: calculateAssetExpenditure(entries),
+    utilizationPercent: card?.utilizationPercent ?? null,
+    balanceSeries: accountBalanceSeries(account, entries, 30),
   };
 }
 

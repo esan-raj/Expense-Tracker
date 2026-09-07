@@ -14,8 +14,13 @@ import type { TransactionDoc } from '@/database/types';
 
 function matchesQuery(row: TransactionDoc, query: TransactionQuery, categoryName?: string): boolean {
   const filters = query.filters ?? {};
-  if (filters.type && filters.type !== 'all' && row.type !== filters.type) return false;
+  if (filters.isTransfer === true && !row.isTransfer) return false;
+  if (filters.isTransfer === false && row.isTransfer) return false;
+  if (filters.type && filters.type !== 'all') {
+    if (row.isTransfer || row.type !== filters.type) return false;
+  }
   if (filters.categoryId && row.categoryId !== filters.categoryId) return false;
+  if (filters.categoryIds?.length && !filters.categoryIds.includes(row.categoryId)) return false;
   if (filters.paymentMethod && row.paymentMethod !== filters.paymentMethod) return false;
   if (filters.startDate && row.date < filters.startDate) return false;
   if (filters.endDate && row.date > filters.endDate) return false;

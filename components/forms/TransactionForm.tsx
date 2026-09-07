@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
 import { Input } from '@/components/ui/Input';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
@@ -64,6 +64,7 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
   const entryType = form.watch('entryType');
   const type = form.watch('type');
   const isRecurring = form.watch('isRecurring');
+  const [showMore, setShowMore] = useState(Boolean(initial?.notes || initial?.isRecurring));
   const categoryOptions = useMemo(
     () =>
       categories
@@ -191,76 +192,83 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
           <DatePicker label="Date" value={field.value} onChange={field.onChange} error={fieldState.error?.message} />
         )}
       />
-      {entryType !== 'transfer' ? (
-        <Controller
-          control={form.control}
-          name="paymentMethod"
-          render={({ field, fieldState }) => (
-            <Select
-              label="Payment method"
-              value={field.value}
-              options={PAYMENT_METHODS}
-              onChange={field.onChange}
-              error={fieldState.error?.message}
-            />
-          )}
-        />
-      ) : null}
-      <Controller
-        control={form.control}
-        name="notes"
-        render={({ field }) => (
-          <Input
-            label="Notes"
-            value={field.value}
-            onChangeText={field.onChange}
-            placeholder="Optional"
-            multiline
-          />
-        )}
-      />
-      {!initial && entryType !== 'transfer' ? (
-        <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <View style={styles.flex}>
-            <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>Make this recurring</Text>
-            <Text style={{ color: colors.textSecondary, marginTop: 4 }}>Automatically create future transactions</Text>
-          </View>
-          <Controller
-            control={form.control}
-            name="isRecurring"
-            render={({ field }) => (
-              <Switch value={field.value} onValueChange={field.onChange} accessibilityLabel="Make this recurring" />
-            )}
-          />
-        </View>
-      ) : null}
-      {isRecurring && !initial && entryType !== 'transfer' ? (
+      <Pressable onPress={() => setShowMore((value) => !value)} accessibilityRole="button" accessibilityLabel="More options">
+        <Text style={{ color: colors.primary, fontWeight: '700' }}>{showMore ? 'Hide extra details' : 'More options'}</Text>
+      </Pressable>
+      {showMore ? (
         <>
+          {entryType !== 'transfer' ? (
+            <Controller
+              control={form.control}
+              name="paymentMethod"
+              render={({ field, fieldState }) => (
+                <Select
+                  label="Payment method"
+                  value={field.value}
+                  options={PAYMENT_METHODS}
+                  onChange={field.onChange}
+                  error={fieldState.error?.message}
+                />
+              )}
+            />
+          ) : null}
           <Controller
             control={form.control}
-            name="frequency"
-            render={({ field, fieldState }) => (
-              <Select
-                label="Frequency"
+            name="notes"
+            render={({ field }) => (
+              <Input
+                label="Notes"
                 value={field.value}
-                options={FREQUENCIES}
-                onChange={field.onChange}
-                error={fieldState.error?.message}
+                onChangeText={field.onChange}
+                placeholder="Optional"
+                multiline
               />
             )}
           />
-          <Controller
-            control={form.control}
-            name="recurringStartDate"
-            render={({ field, fieldState }) => (
-              <DatePicker
-                label="Start date"
-                value={field.value ?? todayKey()}
-                onChange={field.onChange}
-                error={fieldState.error?.message}
+          {!initial && entryType !== 'transfer' ? (
+            <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View style={styles.flex}>
+                <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>Make this recurring</Text>
+                <Text style={{ color: colors.textSecondary, marginTop: 4 }}>Automatically create future transactions</Text>
+              </View>
+              <Controller
+                control={form.control}
+                name="isRecurring"
+                render={({ field }) => (
+                  <Switch value={field.value} onValueChange={field.onChange} accessibilityLabel="Make this recurring" />
+                )}
               />
-            )}
-          />
+            </View>
+          ) : null}
+          {isRecurring && !initial && entryType !== 'transfer' ? (
+            <>
+              <Controller
+                control={form.control}
+                name="frequency"
+                render={({ field, fieldState }) => (
+                  <Select
+                    label="Frequency"
+                    value={field.value}
+                    options={FREQUENCIES}
+                    onChange={field.onChange}
+                    error={fieldState.error?.message}
+                  />
+                )}
+              />
+              <Controller
+                control={form.control}
+                name="recurringStartDate"
+                render={({ field, fieldState }) => (
+                  <DatePicker
+                    label="Start date"
+                    value={field.value ?? todayKey()}
+                    onChange={field.onChange}
+                    error={fieldState.error?.message}
+                  />
+                )}
+              />
+            </>
+          ) : null}
         </>
       ) : null}
       <Button

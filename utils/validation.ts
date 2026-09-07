@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PAYMENT_METHODS, FREQUENCIES, BACKUP_VERSION } from './constants';
 import { ACCOUNT_TYPES } from '@/types/account';
+import { INVESTMENT_TYPES } from '@/types/investment';
 
 const paymentMethodValues = PAYMENT_METHODS.map((item) => item.value) as [
   (typeof PAYMENT_METHODS)[number]['value'],
@@ -56,6 +57,16 @@ export const transactionFormSchema = z.object({
       message: 'Choose how often this repeats',
     });
   }
+});
+
+export const investmentFormSchema = z.object({
+  name: z.string().trim().min(1, 'Investment name is required').max(80, 'Name is too long'),
+  type: z.enum(INVESTMENT_TYPES),
+  investedAmount: z.number().positive('Amount invested must be greater than 0').max(1_000_000_000),
+  currentValue: z.number().min(0, 'Current value cannot be negative').max(1_000_000_000).optional(),
+  investmentDate: dateKeySchema,
+  accountId: z.string().optional().or(z.literal('')),
+  notes: z.string().max(500, 'Notes are too long').optional().or(z.literal('')),
 });
 
 export const accountFormSchema = z.object({
@@ -187,6 +198,19 @@ const backupRecurringSchema = z.object({
   updatedAt: z.string(),
 });
 
+const backupInvestmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(INVESTMENT_TYPES),
+  investedAmount: z.number().int(),
+  currentValue: z.number().int(),
+  investmentDate: dateKeySchema,
+  accountId: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 const backupAccountSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -205,6 +229,8 @@ const backupSettingsSchema = z.object({
   currency: z.enum(['INR', 'USD', 'EUR', 'GBP', 'JPY']),
   currencySymbol: z.string(),
   theme: z.enum(['system', 'light', 'dark']),
+  accentPreset: z.enum(['emerald', 'ocean', 'indigo', 'violet', 'amber', 'rose', 'custom']).optional().default('emerald'),
+  accentColor: z.string().optional().default('#0E7C66'),
   firstDayOfWeek: z.number().int().min(0).max(6),
   monthlyBudget: z.number().int().nullable(),
   onboardingComplete: z.boolean(),
@@ -218,6 +244,7 @@ export const backupSchema = z.object({
   budgets: z.array(backupBudgetSchema),
   recurringTransactions: z.array(backupRecurringSchema),
   accounts: z.array(backupAccountSchema).optional().default([]),
+  investments: z.array(backupInvestmentSchema).optional().default([]),
   settings: backupSettingsSchema,
 });
 
@@ -226,6 +253,7 @@ export type BudgetFormValues = z.infer<typeof budgetFormSchema>;
 export type CategoryFormValues = z.infer<typeof categoryFormSchema>;
 export type RecurringFormValues = z.infer<typeof recurringFormSchema>;
 export type AccountFormValues = z.infer<typeof accountFormSchema>;
+export type InvestmentFormValues = z.infer<typeof investmentFormSchema>;
 export type BackupPayload = z.infer<typeof backupSchema>;
 
 export function validateBackup(data: unknown): BackupPayload {

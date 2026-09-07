@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
+import { typography } from '@/constants/theme';
 
 interface SectionHeaderProps {
   title: string;
@@ -11,10 +12,10 @@ export function SectionHeader({ title, actionLabel, onAction }: SectionHeaderPro
   const { colors } = useTheme();
   return (
     <View style={styles.row}>
-      <Text style={[styles.title, { color: colors.textPrimary }]}>{title}</Text>
+      <Text style={[typography.section, { color: colors.textPrimary }]}>{title}</Text>
       {actionLabel && onAction ? (
-        <Pressable onPress={onAction} accessibilityRole="button" accessibilityLabel={actionLabel}>
-          <Text style={{ color: colors.primary, fontWeight: '700' }}>{actionLabel}</Text>
+        <Pressable onPress={onAction} accessibilityRole="button" accessibilityLabel={actionLabel} hitSlop={8}>
+          <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 14 }}>{actionLabel}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -23,5 +24,4 @@ export function SectionHeader({ title, actionLabel, onAction }: SectionHeaderPro
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  title: { fontSize: 18, fontWeight: '700' },
 });

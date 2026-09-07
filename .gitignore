@@ -36,6 +36,8 @@ yarn-error.*
 
 # personal Excel import artifacts
 data/excel-import-backup.json
+reports/
+Transaction September.xlsx
 
 # typescript
 *.tsbuildinfo

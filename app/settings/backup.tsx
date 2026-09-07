@@ -32,9 +32,9 @@ export default function BackupScreen() {
 
   return (
     <Screen scroll>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Create backup</Text>
-        <Text style={styles.copy}>Saves transactions, accounts, categories, budgets, recurring items, and settings as JSON.</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>Saves transactions, accounts, categories, budgets, recurring items, and settings as JSON.</Text>
         <Button
           title="Create backup"
           loading={busy}
@@ -50,9 +50,9 @@ export default function BackupScreen() {
           }}
         />
       </Card>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Restore backup</Text>
-        <Text style={styles.copy}>The file is validated first. Restore replaces current data only after you confirm.</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>The file is validated first. Restore replaces current data only after you confirm.</Text>
         <Button
           title="Choose backup file"
           variant="secondary"
@@ -65,9 +65,9 @@ export default function BackupScreen() {
           }}
         />
       </Card>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Sample data</Text>
-        <Text style={styles.copy}>Adds realistic development transactions without replacing your categories.</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>Adds realistic development transactions without replacing your categories.</Text>
         <Button
           title="Load sample data"
           variant="secondary"

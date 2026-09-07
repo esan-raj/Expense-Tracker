@@ -7,6 +7,7 @@ import type {
   TransactionWithCategory,
   RecurringTransactionWithCategory,
   ThemePreference,
+  AccentPreset,
   CurrencyCode,
   TransactionType,
   PaymentMethod,
@@ -85,6 +86,8 @@ interface SettingsRow {
   currency: CurrencyCode | string;
   currencySymbol: string;
   theme: ThemePreference | string;
+  accentPreset?: string;
+  accentColor?: string;
   firstDayOfWeek: number;
   monthlyBudget: number | null;
   onboardingComplete: number | boolean;
@@ -167,13 +170,20 @@ export function mapRecurringWithCategory(row: RecurringRow): RecurringTransactio
 }
 
 export function mapSettings(row: SettingsRow): AppSettings {
+  const preset = row.accentPreset === 'custom' || isNamedPreset(row.accentPreset) ? row.accentPreset : 'emerald';
   return {
     id: row.id,
     currency: row.currency as CurrencyCode,
     currencySymbol: row.currencySymbol,
     theme: row.theme as ThemePreference,
+    accentPreset: preset,
+    accentColor: row.accentColor || '#0E7C66',
     firstDayOfWeek: row.firstDayOfWeek,
     monthlyBudget: row.monthlyBudget,
     onboardingComplete: Boolean(row.onboardingComplete),
   };
+}
+
+function isNamedPreset(value?: string): value is AccentPreset {
+  return value === 'emerald' || value === 'ocean' || value === 'indigo' || value === 'violet' || value === 'amber' || value === 'rose';
 }

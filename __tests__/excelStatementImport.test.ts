@@ -1,4 +1,4 @@
-import { buildImportDataset, parseMoneyToMinor, parseStatementDate, resolveCategoryName, titleFromDetails } from '@/utils/excelStatementImport';
+import { buildImportDataset, buildMappedImport, parseMoneyToMinor, parseStatementDate, resolveCategoryName, titleFromDetails } from '@/utils/excelStatementImport';
 import { calculateAccountBalances } from '@/utils/accountLogic';
 import { calculateTotalExpenses, calculateTotalIncome } from '@/utils/calculations';
 
@@ -103,6 +103,88 @@ describe('excel statement import', () => {
     expect(bankBal.currentBalance).toBe(3888781);
     expect(cardBal.outstanding).toBe(432201);
     expect(cardBal.availableCredit).toBe(6567799);
+  });
+
+  it('maps Excel sheets onto existing account IDs and keeps the card payment as a transfer', () => {
+    const sheets = [
+      {
+        name: 'Pixcel Play Credit Card',
+        rows: [
+          ['Date', 'Details', 'Ref No/Cheque No', 'Debit', 'Credit', 'Balance'],
+          ['02/09/2026', 'Credit Card Bill Payment', '', null, '20302.88', 70000],
+          ['03/09/2026', 'Anoop Kumar Gupta', '', 100, '', 69900],
+        ],
+      },
+      {
+        name: 'SBI Bank Account',
+        rows: [
+          ['Date', 'Details', 'Ref No/Cheque No', 'Debit', 'Credit', 'Balance'],
+          ['01/09/2026', 'WDL TFR UPI/DR/1/ICCL - M/HDFC/mf autopay', '', '5000.00', '', '52169.58'],
+          ['01/09/2026', 'WDL TFR UPI/DR/2/ICCL - M/HDFC/mf autopay', '', '5000.00', '', '47169.58'],
+          ['02/09/2026', 'WDL TFR UPI/DR/6/HDFC BAN/HDFC/hdfcbankdi/empt', '', '20302.88', '', '26260.70'],
+          ['03/09/2026', 'DEP TFR IMPS/8/CNA-XX009-Groww In/PTK', '', null, '13473.91', '39353.71'],
+        ],
+      },
+    ];
+    const existing = {
+      accounts: [
+        {
+          id: 'acct-sbi',
+          name: 'State Bank of India',
+          type: 'bank' as const,
+          institutionName: 'State Bank of India',
+          openingBalance: 5716958,
+          creditLimit: null,
+          isActive: true,
+        },
+        {
+          id: 'acct-card',
+          name: 'Pixcel Play Credit Card',
+          type: 'credit_card' as const,
+          institutionName: 'Pixcel Play',
+          openingBalance: 2030288,
+          creditLimit: 7000000,
+          isActive: true,
+        },
+      ],
+      categories: [
+        { id: 'cat-other', name: 'Other', type: 'expense' as const },
+        { id: 'cat-investment', name: 'Investment', type: 'income' as const },
+        { id: 'cat-transfer', name: 'Transfer', type: 'both' as const },
+      ],
+    };
+    const { dataset, validation } = buildMappedImport(sheets, existing, '2026-09-07T00:00:00.000Z');
+    expect(validation.ready).toBe(true);
+    expect(validation.accountMatches.every((item) => item.accountId)).toBe(true);
+    expect(dataset.transactions.every((item) => item.accountId === 'acct-sbi' || item.accountId === 'acct-card')).toBe(true);
+    expect(dataset.transactions.filter((item) => item.isTransfer)).toHaveLength(2);
+    expect(dataset.transactions.filter((item) => item.amount === 500000)).toHaveLength(2);
+    const groww = dataset.transactions.find((item) => /groww/i.test(item.description ?? ''));
+    expect(groww?.isTransfer).toBe(false);
+    expect(groww?.type).toBe('income');
+    expect(validation.unresolved.some((item) => /Groww/i.test(item.message))).toBe(true);
+    expect(validation.investmentRelated.length).toBeGreaterThanOrEqual(3);
+    const again = buildMappedImport(sheets, existing, '2026-09-07T00:00:00.000Z');
+    expect(again.dataset.transactions.map((item) => item.id).sort()).toEqual(
+      dataset.transactions.map((item) => item.id).sort()
+    );
+  });
+
+  it('stops before import when the expected SBI account is missing', () => {
+    const { validation } = buildMappedImport(
+      [
+        {
+          name: 'SBI Bank Account',
+          rows: [
+            ['Date', 'Details', 'Ref', 'Debit', 'Credit', 'Balance'],
+            ['01/09/2026', 'Coffee', '', 10, '', 10],
+          ],
+        },
+      ],
+      { accounts: [], categories: [{ id: 'cat-other', name: 'Other', type: 'expense' }] }
+    );
+    expect(validation.ready).toBe(false);
+    expect(validation.errors.some((item) => item.message.includes('Missing account'))).toBe(true);
   });
 
   it('does not build a dataset when a required date is invalid', () => {

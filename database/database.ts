@@ -1,3 +1,4 @@
+import { verifyWebCryptoDigest } from './cryptoPolyfill';
 import { addRxPlugin, createRxDatabase, removeRxDatabase, type RxDatabase, type RxStorage } from 'rxdb';
 import { getRxStorageMemory } from 'rxdb/plugins/storage-memory';
 import { RxDBMigrationSchemaPlugin } from 'rxdb/plugins/migration-schema';
@@ -9,6 +10,7 @@ import { recurringTransactionSchema } from './schemas/recurringTransaction.schem
 import { settingsSchema } from './schemas/settings.schema';
 import { syncQueueSchema } from './schemas/syncQueue.schema';
 import { syncStateSchema } from './schemas/syncState.schema';
+import { investmentSchema } from './schemas/investment.schema';
 import { rxError, rxLog } from './logger';
 import type { SpendWiseCollections, SpendWiseDatabase } from './types';
 
@@ -22,6 +24,7 @@ const EXPECTED_COLLECTIONS = [
   'budgets',
   'recurring',
   'settings',
+  'investments',
   'syncQueue',
   'syncState',
 ] as const;
@@ -93,6 +96,7 @@ async function wipeLocalDatabase(name: string): Promise<void> {
 }
 
 export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): Promise<SpendWiseDatabase> {
+  await verifyWebCryptoDigest();
   await maybeEnableDevMode();
   const rawStorage = await getRawStorage();
   const storage = await maybeWrapDevModeStorage(rawStorage);
@@ -121,7 +125,17 @@ export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): P
           1: (doc) => doc,
         },
       },
-      settings: { schema: settingsSchema },
+      settings: {
+        schema: settingsSchema,
+        migrationStrategies: {
+          1: (doc) => ({
+            ...doc,
+            accentPreset: typeof doc.accentPreset === 'string' ? doc.accentPreset : 'emerald',
+            accentColor: typeof doc.accentColor === 'string' ? doc.accentColor : '#0E7C66',
+          }),
+        },
+      },
+      investments: { schema: investmentSchema },
       syncQueue: { schema: syncQueueSchema },
       syncState: { schema: syncStateSchema },
     });
@@ -139,8 +153,10 @@ async function bootstrapDatabase(): Promise<SpendWiseDatabase> {
   const { seedDefaults } = await import('./seed');
   await migrateJsonSnapshot(db);
   await seedDefaults(db);
-  logReadyCollections(db);
   database = db;
+  const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+  await categoryDedupeService.apply();
+  logReadyCollections(db);
   rxLog('init', 'ready');
   return db;
 }

@@ -1,6 +1,7 @@
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { DEFAULT_CURRENCY } from '@/constants/currencies';
 import { SETTINGS_ID } from '@/utils/constants';
+import { categoryIdentityKey } from '@/utils/categoryDedupe';
 import { createId } from '@/utils/id';
 import { nowIso, toDateKey, currentMonthYear } from '@/utils/dates';
 import { toMinorUnits } from '@/utils/currency';
@@ -8,11 +9,13 @@ import { ownerId } from './query';
 import type { SpendWiseDatabase } from './types';
 
 export async function seedDefaults(db: SpendWiseDatabase): Promise<void> {
-  const categoryCount = await db.categories.count().exec();
-  if (categoryCount === 0) {
+  const existing = await db.categories.find({ selector: { deletedAt: '' } }).exec();
+  const keys = new Set(existing.map((row) => categoryIdentityKey(row.name, row.type)));
+  const missing = DEFAULT_CATEGORIES.filter((category) => !keys.has(categoryIdentityKey(category.name, category.type)));
+  if (missing.length > 0) {
     const createdAt = nowIso();
     await db.categories.bulkInsert(
-      DEFAULT_CATEGORIES.map((category) => ({
+      missing.map((category) => ({
         id: createId(),
         userId: '',
         name: category.name,
@@ -34,6 +37,8 @@ export async function seedDefaults(db: SpendWiseDatabase): Promise<void> {
       currency: DEFAULT_CURRENCY.code,
       currencySymbol: DEFAULT_CURRENCY.symbol,
       theme: 'system',
+      accentPreset: 'emerald',
+      accentColor: '#0E7C66',
       firstDayOfWeek: 1,
       monthlyBudget: 0,
       onboardingComplete: false,

@@ -27,7 +27,7 @@ export default function AccountScreen() {
 
   return (
     <Screen scroll>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.label, { color: colors.textSecondary }]}>Email</Text>
         <Text style={[styles.value, { color: colors.textPrimary }]}>{user?.email ?? 'Using this device offline'}</Text>
         <Text style={[styles.label, { color: colors.textSecondary }]}>Sync status</Text>

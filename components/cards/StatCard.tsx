@@ -13,7 +13,7 @@ export function StatCard({ label, value, hint, tone = 'default' }: StatCardProps
   const { colors } = useTheme();
   const valueColor = tone === 'income' ? colors.income : tone === 'expense' ? colors.expense : colors.textPrimary;
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} elevated={false}>
       <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
       <Text style={[styles.value, { color: valueColor }]} numberOfLines={1}>
         {value}
@@ -24,8 +24,8 @@ export function StatCard({ label, value, hint, tone = 'default' }: StatCardProps
 }
 
 const styles = StyleSheet.create({
-  card: { flex: 1 },
+  card: { flex: 1, minWidth: 140 },
   label: { fontSize: 13, fontWeight: '600' },
-  value: { fontSize: 22, fontWeight: '700', marginTop: 8 },
+  value: { fontSize: 20, fontWeight: '700', marginTop: 8, fontVariant: ['tabular-nums'] },
   hint: { fontSize: 12, marginTop: 6 },
 });

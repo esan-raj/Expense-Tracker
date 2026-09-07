@@ -1,5 +1,6 @@
 import { transactionRepository } from '@/database/repositories/transactionRepository';
 import { accountService } from '@/services/accountService';
+import { investmentService, summarizeInvestments } from '@/services/investmentService';
 import { excludeTransfers, isLiabilityAccount } from '@/utils/accountLogic';
 import {
   calculateAverageDailySpending,
@@ -20,7 +21,7 @@ export const reportService = {
     const prevLast = new Date(prev.year, prev.month, 0).getDate();
     const prevEnd = `${prev.year}-${String(prev.month).padStart(2, '0')}-${String(prevLast).padStart(2, '0')}`;
 
-    const [allTime, current, previous, recent, categories, weekKeys, accountRows] = await Promise.all([
+    const [allTime, current, previous, recent, categories, weekKeys, accountRows, investments] = await Promise.all([
       transactionRepository.totals(),
       transactionRepository.totals(startDate, endDate),
       transactionRepository.totals(prevStart, prevEnd),
@@ -28,12 +29,27 @@ export const reportService = {
       transactionRepository.categoryTotals('expense', startDate, endDate),
       Promise.resolve(lastNDaysKeys(7)),
       accountService.list(true),
+      investmentService.list(),
     ]);
 
     const weekStart = weekKeys[0];
     const weekEnd = weekKeys[weekKeys.length - 1];
     const weekDaily = await transactionRepository.dailyTotals('expense', weekStart, weekEnd);
     const weekMap = Object.fromEntries(weekDaily.map((item) => [item.date, item.amount]));
+    const monthSeries = await Promise.all(
+      Array.from({ length: 6 }, (_, index) => {
+        const cursor = new Date(year, month - 6 + index, 1);
+        const seriesMonth = cursor.getMonth() + 1;
+        const seriesYear = cursor.getFullYear();
+        const seriesStart = `${seriesYear}-${String(seriesMonth).padStart(2, '0')}-01`;
+        const seriesEnd = `${seriesYear}-${String(seriesMonth).padStart(2, '0')}-${String(new Date(seriesYear, seriesMonth, 0).getDate()).padStart(2, '0')}`;
+        return transactionRepository.totals(seriesStart, seriesEnd).then((totals) => ({
+          date: seriesStart,
+          amount: totals.expenses,
+          label: cursor.toLocaleString('en-IN', { month: 'short' }),
+        }));
+      })
+    );
 
     return {
       balance: allTime.income - allTime.expenses,
@@ -54,13 +70,17 @@ export const reportService = {
         4
       ),
       weekSeries: weekKeys.map((date) => ({ date, amount: weekMap[date] ?? 0 })),
+      monthSeries,
       accounts: {
         bankBalance: accountRows.filter((item) => !isLiabilityAccount(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
         creditOutstanding: accountRows.filter((item) => isLiabilityAccount(item.type)).reduce((sum, item) => sum + item.outstanding, 0),
         availableCredit: accountRows
           .filter((item) => isLiabilityAccount(item.type))
           .reduce((sum, item) => sum + (item.availableCredit ?? 0), 0),
+        cards: accountRows.filter((item) => item.isActive),
       },
+      investments: summarizeInvestments(investments),
+      investmentCount: investments.length,
     };
   },
 

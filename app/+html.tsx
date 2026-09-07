@@ -20,6 +20,12 @@ export default function Root({ children }: { children: ReactNode }) {
         <ScrollViewStyleReset />
 
         {/* Using raw CSS styles as an escape-hatch to ensure the background color never flickers in dark-mode. */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
+          rel="stylesheet"
+        />
         <style dangerouslySetInnerHTML={{ __html: responsiveBackground }} />
         {/* Add any additional <head> elements that you want globally available on web... */}
       </head>
@@ -36,11 +42,14 @@ html, body, #root {
   display: flex;
   flex-direction: column;
 }
+html, body {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
 body {
-  background-color: #fff;
+  background-color: #F4F1EA;
 }
 @media (prefers-color-scheme: dark) {
   body {
-    background-color: #000;
+    background-color: #0E1412;
   }
 }`;

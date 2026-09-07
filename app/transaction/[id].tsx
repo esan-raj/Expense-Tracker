@@ -5,15 +5,15 @@ import { Screen } from '@/components/ui/Screen';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { Amount } from '@/components/ui/Amount';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { transactionService } from '@/services/transactionService';
 import { useTransactionStore } from '@/store/useTransactionStore';
 import { useBudgetStore } from '@/store/useBudgetStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useTheme } from '@/hooks/useTheme';
-import { formatMoney } from '@/utils/currency';
 import { formatDisplayDate } from '@/utils/dates';
 import { paymentMethodLabel } from '@/utils/constants';
 import { toUserMessage } from '@/utils/errors';
@@ -38,32 +38,42 @@ export default function TransactionDetailScreen() {
   }, [id]);
 
   if (error) return <ErrorState message={error} onRetry={() => router.back()} />;
-  if (!item) return <LoadingState />;
+  if (!item) return <ScreenSkeleton variant="detail" />;
+
+  const kind = item.isTransfer ? 'Transfer' : item.type === 'income' ? 'Income' : 'Expense';
 
   return (
     <Screen scroll>
       <Card>
         <View style={styles.hero}>
-          <CategoryIcon icon={item.categoryIcon} color={item.categoryColor} size={56} />
-          <Text style={[styles.amount, { color: item.type === 'income' ? colors.income : colors.expense }]}>
-            {formatMoney(item.amount, currency, { type: item.type })}
-          </Text>
+          <CategoryIcon
+            icon={item.isTransfer ? 'swap-horizontal' : item.categoryIcon}
+            color={item.isTransfer ? colors.transfer : item.categoryColor}
+            size={56}
+          />
           <Text style={[styles.title, { color: colors.textPrimary }]}>{item.title}</Text>
-          <Text style={{ color: colors.textSecondary }}>
-            {item.isTransfer ? 'Transfer' : item.type === 'income' ? 'Income' : 'Expense'}
-          </Text>
+          <Text style={{ color: colors.textSecondary }}>{item.isTransfer ? 'Transfer' : item.categoryName}</Text>
+          <Amount
+            minor={item.amount}
+            currency={currency}
+            type={item.isTransfer ? 'transfer' : item.type}
+            size="hero"
+          />
         </View>
       </Card>
-      <Card>
+      <Card elevated={false}>
         <Row label="Account" value={item.accountName ?? 'No account assigned'} color={colors} />
         {item.isTransfer ? null : <Row label="Category" value={item.categoryName} color={colors} />}
+        <Row label="Type" value={kind} color={colors} />
         <Row label="Date" value={formatDisplayDate(item.date)} color={colors} />
-        <Row label="Payment" value={paymentMethodLabel(item.paymentMethod)} color={colors} />
+        {item.isTransfer ? null : <Row label="Payment method" value={paymentMethodLabel(item.paymentMethod)} color={colors} />}
         <Row label="Recurring" value={item.isRecurring ? 'Yes' : 'No'} color={colors} />
         <Row label="Notes" value={item.notes || 'None'} color={colors} />
       </Card>
-      <Button title="Edit" onPress={() => router.push({ pathname: '/transaction/edit', params: { id: item.id } })} />
-      <Button title="Delete" variant="danger" onPress={() => setConfirm(true)} />
+      <View style={styles.actions}>
+        <Button title="Edit transaction" onPress={() => router.push({ pathname: '/transaction/edit', params: { id: item.id } })} />
+        <Button title="Delete" variant="ghost" onPress={() => setConfirm(true)} />
+      </View>
       <ConfirmDialog
         visible={confirm}
         title="Delete transaction?"
@@ -96,7 +106,7 @@ function Row({ label, value, color }: { label: string; value: string; color: { t
 
 const styles = StyleSheet.create({
   hero: { alignItems: 'center', gap: 8 },
-  amount: { fontSize: 36, fontWeight: '800' },
   title: { fontSize: 20, fontWeight: '700', textAlign: 'center' },
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, paddingVertical: 10 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, paddingVertical: 12 },
+  actions: { gap: 12, marginTop: 8 },
 });

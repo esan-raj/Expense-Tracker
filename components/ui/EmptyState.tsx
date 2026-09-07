@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
-import { spacing } from '@/constants/theme';
+import { radius, spacing } from '@/constants/theme';
 import { Button } from './Button';
 
 interface EmptyStateProps {
@@ -28,7 +28,7 @@ export function EmptyState({ icon = 'wallet-outline', title, message, actionLabe
 
 const styles = StyleSheet.create({
   wrap: { alignItems: 'center', paddingVertical: 48, gap: spacing.md, paddingHorizontal: 24 },
-  iconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  iconWrap: { width: 64, height: 64, borderRadius: radius.xl, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 20, fontWeight: '700', textAlign: 'center' },
   message: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
 });

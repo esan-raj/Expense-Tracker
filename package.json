@@ -10,7 +10,10 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "import:excel": "npx tsx scripts/import-excel.ts"
+    "import:excel": "npx tsx scripts/import-excel.ts",
+    "import:transactions": "npx tsx scripts/import-transactions-excel.ts",
+    "dedupe:categories": "npx tsx scripts/dedupe-categories.ts",
+    "dedupe:categories:apply": "npx tsx scripts/dedupe-categories.ts --apply"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

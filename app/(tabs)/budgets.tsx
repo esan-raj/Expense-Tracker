@@ -1,20 +1,23 @@
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { PageScroll } from '@/components/ui/PageScroll';
 import { Card } from '@/components/ui/Card';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { BudgetCard } from '@/components/cards/BudgetCard';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { IconButton } from '@/components/ui/IconButton';
+import { Amount } from '@/components/ui/Amount';
 import { useTheme } from '@/hooks/useTheme';
 import { useBudgetStore } from '@/store/useBudgetStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { formatMoney } from '@/utils/currency';
 import { formatMonthYear } from '@/utils/dates';
+import { spacing } from '@/constants/theme';
 
 export default function BudgetsScreen() {
   const { colors } = useTheme();
@@ -27,35 +30,38 @@ export default function BudgetsScreen() {
 
   const overall = items.find((item) => item.categoryId === null);
   const categoryBudgets = items.filter((item) => item.categoryId);
+  const tone = overall ? (overall.percent >= 100 ? 'danger' : overall.percent >= 75 ? 'warning' : 'success') : 'success';
+  const status = overall
+    ? overall.percent >= 100
+      ? 'Over budget'
+      : overall.percent >= 75
+        ? 'Approaching your limit'
+        : "You're on track"
+    : '';
 
   return (
     <Screen padded={false}>
       <View style={styles.header}>
-        <View>
-          <Text style={[styles.title, { color: colors.textPrimary }]}>Budgets</Text>
-          <Text style={{ color: colors.textSecondary }}>{formatMonthYear(month, year)}</Text>
-        </View>
-        <Pressable
-          onPress={() => router.push('/budgets/add')}
-          accessibilityRole="button"
-          accessibilityLabel="Create budget"
-          style={[styles.add, { backgroundColor: colors.primaryMuted }]}
-        >
-          <Ionicons name="add" size={22} color={colors.primary} />
-        </Pressable>
+        <PageHeader
+          title="Budgets"
+          subtitle={formatMonthYear(month, year)}
+          action={<IconButton name="add" accessibilityLabel="Create budget" onPress={() => router.push('/budgets/add')} />}
+        />
       </View>
-      {loading && items.length === 0 ? <LoadingState /> : null}
+      {loading && items.length === 0 ? <ScreenSkeleton variant="list" /> : null}
       {error && items.length === 0 ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <PageScroll style={styles.scroller} contentContainerStyle={styles.content}>
         {overall ? (
           <Card>
-            <Text style={{ color: colors.textSecondary }}>Total Budget</Text>
-            <Text style={[styles.big, { color: colors.textPrimary }]}>{formatMoney(overall.amount, currency)}</Text>
-            <View style={styles.stats}>
-              <Text style={{ color: colors.expense, fontWeight: '700' }}>Spent {formatMoney(overall.spent, currency)}</Text>
-              <Text style={{ color: colors.income, fontWeight: '700' }}>Remaining {formatMoney(Math.max(overall.remaining, 0), currency)}</Text>
-            </View>
-            <ProgressBar progress={overall.percent / 100} tone={overall.percent >= 100 ? 'danger' : overall.percent >= 75 ? 'warning' : 'primary'} />
+            <Amount minor={overall.spent} currency={currency} size="hero" />
+            <Text style={{ color: colors.textSecondary, marginTop: 4 }}>
+              of {formatMoney(overall.amount, currency)} budget
+            </Text>
+            <Text style={[styles.percent, { color: colors.textPrimary }]}>{overall.percent}%</Text>
+            <ProgressBar progress={overall.percent / 100} tone={tone} />
+            <Text style={{ color: overall.percent >= 100 ? colors.danger : colors.textSecondary, marginTop: 10, fontWeight: '600' }}>
+              {status}
+            </Text>
           </Card>
         ) : null}
         {items.length === 0 && !loading ? (
@@ -67,10 +73,11 @@ export default function BudgetsScreen() {
           />
         ) : (
           categoryBudgets.map((item) => (
-            <BudgetCard key={item.id} item={item} onPress={() => router.push(`/budgets/${item.id}`)} />
+            <Card key={item.id} elevated={false}>
+              <BudgetCard item={item} onPress={() => router.push(`/budgets/${item.id}`)} />
+            </Card>
           ))
         )}
-        {overall ? <BudgetCard item={overall} onPress={() => router.push(`/budgets/${overall.id}`)} /> : null}
       </PageScroll>
     </Screen>
   );
@@ -78,10 +85,7 @@ export default function BudgetsScreen() {
 
 const styles = StyleSheet.create({
   scroller: { flex: 1, minHeight: 0 },
-  header: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: 28, fontWeight: '800' },
-  add: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  content: { paddingHorizontal: 16, gap: 12, paddingBottom: 32 },
-  big: { fontSize: 32, fontWeight: '800', marginVertical: 8 },
-  stats: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  header: { paddingHorizontal: spacing.lg, paddingTop: 8, paddingBottom: 8 },
+  content: { paddingHorizontal: spacing.lg, gap: 12, paddingBottom: 32 },
+  percent: { fontSize: 18, fontWeight: '800', marginVertical: 10 },
 });

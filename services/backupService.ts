@@ -4,6 +4,7 @@ import { budgetRepository } from '@/database/repositories/budgetRepository';
 import { recurringRepository } from '@/database/repositories/recurringRepository';
 import { settingsRepository } from '@/database/repositories/settingsRepository';
 import { accountRepository } from '@/database/repositories/accountRepository';
+import { investmentRepository } from '@/database/repositories/investmentRepository';
 import { getRxDatabase } from '@/database';
 import { BACKUP_VERSION } from '@/utils/constants';
 import { AppError, logError } from '@/utils/errors';
@@ -23,6 +24,7 @@ export const backupService = {
         budgets: await budgetRepository.exportAll(),
         recurringTransactions: await recurringRepository.exportAll(),
         accounts: await accountRepository.list(true),
+        investments: await investmentRepository.list(),
         settings: await settingsRepository.get(),
       };
       await saveAndShare('spendwise-backup.json', JSON.stringify(payload, null, 2), 'application/json');
@@ -60,6 +62,7 @@ export const backupService = {
       await recurringRepository.replaceAll([]);
       const accountIds = new Set((payload.accounts ?? []).map((item) => item.id));
       await accountRepository.replaceAll(payload.accounts ?? []);
+      await investmentRepository.replaceAll(payload.investments ?? []);
       await categoryRepository.replaceAll(payload.categories);
       await recurringRepository.replaceAll(
         payload.recurringTransactions.map((item) => ({

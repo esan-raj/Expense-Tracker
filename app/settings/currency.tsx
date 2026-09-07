@@ -26,7 +26,7 @@ export default function CurrencyScreen() {
       <Text style={[styles.copy, { color: colors.textSecondary }]}>
         Amounts are stored in the smallest currency unit to keep calculations accurate.
       </Text>
-      <Card>
+      <Card elevated={false}>
         <View style={styles.list}>
           {CURRENCIES.map((item) => (
             <Button

@@ -19,6 +19,9 @@ export const categoryService = {
       return created;
     } catch (error) {
       logError('category.create', error);
+      if (error instanceof Error && error.message.includes('already exists')) {
+        throw new AppError(error.message, error);
+      }
       throw new AppError('We could not create this category.', error);
     }
   },
@@ -30,6 +33,9 @@ export const categoryService = {
       return updated;
     } catch (error) {
       logError('category.update', error);
+      if (error instanceof Error && error.message.includes('already exists')) {
+        throw new AppError(error.message, error);
+      }
       throw new AppError('We could not update this category.', error);
     }
   },

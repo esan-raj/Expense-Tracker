@@ -10,6 +10,7 @@ import { syncService } from '@/services/syncService';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useCategoryStore } from '@/store/useCategoryStore';
 import { useAccountStore } from '@/store/useAccountStore';
+import { useInvestmentStore } from '@/store/useInvestmentStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSyncStore } from '@/store/useSyncStore';
 import { useTheme } from '@/hooks/useTheme';
@@ -27,6 +28,7 @@ export default function RootLayout() {
   const loadSettings = useSettingsStore((state) => state.load);
   const loadCategories = useCategoryStore((state) => state.load);
   const loadAccounts = useAccountStore((state) => state.load);
+  const loadInvestments = useInvestmentStore((state) => state.load);
   const hydrateAuth = useAuthStore((state) => state.hydrate);
   const hydrateSync = useSyncStore((state) => state.hydrate);
   const user = useAuthStore((state) => state.user);
@@ -37,7 +39,7 @@ export default function RootLayout() {
     try {
       await getRxDatabase();
       await hydrateAuth();
-      await Promise.all([loadSettings(), loadCategories(), loadAccounts(), hydrateSync()]);
+      await Promise.all([loadSettings(), loadCategories(), loadAccounts(), loadInvestments(), hydrateSync()]);
       await recurringService.processDue();
       setReady(true);
       const currentUser = useAuthStore.getState().user;
@@ -45,6 +47,7 @@ export default function RootLayout() {
         void syncService.startRealtime(currentUser.id, () => {
           void loadCategories();
           void loadAccounts();
+          void loadInvestments();
         });
         void syncNow();
       }
@@ -66,13 +69,15 @@ export default function RootLayout() {
     if (!ready) return;
     void loadCategories();
     void loadAccounts();
+    void loadInvestments();
     if (user) {
       void syncService.startRealtime(user.id, () => {
         void loadCategories();
         void loadAccounts();
+        void loadInvestments();
       });
     }
-  }, [ready, user, loadCategories, loadAccounts]);
+  }, [ready, user, loadCategories, loadAccounts, loadInvestments]);
 
   if (error) {
     return <ErrorState message={error} onRetry={() => void bootstrap()} />;
@@ -115,6 +120,7 @@ function RootNavigation() {
         <Stack.Screen name="recurring" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="accounts" options={{ headerShown: false }} />
+        <Stack.Screen name="investments" options={{ headerShown: false }} />
         <Stack.Screen name="reset-password" options={{ title: 'Reset password' }} />
       </Stack>
   );

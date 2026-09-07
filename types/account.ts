@@ -36,7 +36,11 @@ export interface AccountBalances {
   availableCredit: number | null;
 }
 
-export interface AccountWithBalances extends Account, AccountBalances {}
+export interface AccountWithBalances extends Account, AccountBalances {
+  expenditure: number;
+  utilizationPercent?: number | null;
+  balanceSeries?: { date: string; value: number }[];
+}
 
 export interface TransferInput {
   sourceAccountId: string;

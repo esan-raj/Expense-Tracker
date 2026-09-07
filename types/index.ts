@@ -5,3 +5,4 @@ export * from './recurring';
 export * from './settings';
 export * from './sync';
 export * from './account';
+export * from './investment';

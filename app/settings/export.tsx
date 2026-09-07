@@ -17,7 +17,7 @@ export default function ExportScreen() {
 
   return (
     <Screen scroll>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>CSV export</Text>
         <Text style={{ color: colors.textSecondary, lineHeight: 22, marginBottom: 16 }}>
           Share a spreadsheet containing date, type, title, category, amount, payment method, and notes.
@@ -37,7 +37,7 @@ export default function ExportScreen() {
           }}
         />
       </Card>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>CSV import</Text>
         <Text style={{ color: colors.textSecondary, lineHeight: 22, marginBottom: 16 }}>
           Import a previously exported SpendWise CSV. Existing transactions are kept.

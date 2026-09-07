@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -11,10 +11,12 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { useCategoryStore } from '@/store/useCategoryStore';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSyncStore } from '@/store/useSyncStore';
+import { useTheme } from '@/hooks/useTheme';
 import { signUpSchema, type SignUpValues } from '@/utils/validation';
 import { toUserMessage } from '@/utils/errors';
 
 export default function SignUpScreen() {
+  const { colors } = useTheme();
   const signUp = useAuthStore((state) => state.signUp);
   const session = useAuthStore((state) => state.session);
   const onboardingComplete = useSettingsStore((state) => state.settings.onboardingComplete);
@@ -31,6 +33,11 @@ export default function SignUpScreen() {
 
   return (
     <Screen scroll>
+      <View style={styles.hero}>
+        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Create account</Text>
+        <Text style={[styles.copy, { color: colors.textSecondary }]}>Sync stays optional. Your data starts on this device.</Text>
+      </View>
       <Controller
         control={form.control}
         name="email"
@@ -72,7 +79,7 @@ export default function SignUpScreen() {
         )}
       />
       <Button
-        title={syncing ? 'Downloading your data...' : 'Create Account'}
+        title={syncing ? 'Downloading your data...' : 'Create account'}
         loading={submitting}
         onPress={form.handleSubmit(async (values) => {
           setSubmitting(true);
@@ -95,6 +102,19 @@ export default function SignUpScreen() {
           }
         })}
       />
+      <Pressable onPress={() => router.push('/(auth)/login')}>
+        <Text style={[styles.switch, { color: colors.textSecondary }]}>
+          Already have an account? <Text style={{ color: colors.primary, fontWeight: '700' }}>Sign in</Text>
+        </Text>
+      </Pressable>
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  hero: { marginBottom: 20, gap: 6 },
+  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
+  copy: { fontSize: 15, lineHeight: 22 },
+  switch: { textAlign: 'center', marginTop: 16 },
+});

@@ -149,18 +149,20 @@ const UPSERT_RANK: Record<string, number> = {
   profile: 0,
   category: 1,
   account: 2,
-  recurring: 3,
-  budget: 4,
-  transaction: 5,
+  investment: 3,
+  recurring: 4,
+  budget: 5,
+  transaction: 6,
 };
 
 const DELETE_RANK: Record<string, number> = {
   transaction: 10,
   budget: 11,
   recurring: 12,
-  account: 13,
-  category: 14,
-  profile: 15,
+  investment: 13,
+  account: 14,
+  category: 15,
+  profile: 16,
 };
 
 export function sortQueueForPush<T extends Pick<SyncQueueItem, 'entityType' | 'operation' | 'createdAt'>>(

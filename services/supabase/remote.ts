@@ -1,24 +1,39 @@
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
-import type { Account, AppSettings, Budget, Category, RecurringTransaction, Transaction } from '@/types';
+import type { Account, AppSettings, Budget, Category, Investment, RecurringTransaction, Transaction } from '@/types';
 import {
   fromRemoteAccount,
   fromRemoteBudget,
   fromRemoteCategory,
+  fromRemoteInvestment,
   fromRemoteRecurring,
   fromRemoteTransaction,
   toRemoteAccount,
   toRemoteBudget,
   toRemoteCategory,
+  toRemoteInvestment,
   toRemoteProfile,
   toRemoteRecurring,
   toRemoteTransaction,
   type RemoteAccount,
   type RemoteBudget,
   type RemoteCategory,
+  type RemoteInvestment,
   type RemoteProfile,
   type RemoteRecurring,
   type RemoteTransaction,
 } from './mappers';
+
+function isMissingTable(error: unknown): boolean {
+  const record = error && typeof error === 'object' ? (error as { code?: unknown; message?: unknown }) : null;
+  const code = record?.code != null ? String(record.code) : '';
+  const message =
+    error instanceof Error
+      ? error.message
+      : record?.message != null
+        ? String(record.message)
+        : String(error);
+  return code === 'PGRST205' || /Could not find the table|relation .* does not exist|PGRST205/i.test(message);
+}
 
 async function requireUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser();
@@ -93,6 +108,34 @@ export const remoteApi = {
       .eq('id', id)
       .eq('user_id', userId);
     if (error) throw error;
+  },
+
+  async upsertInvestment(item: Investment): Promise<void> {
+    const userId = await requireUserId();
+    const { error } = await supabase.from('investments').upsert(toRemoteInvestment(item, userId));
+    if (error) throw error;
+  },
+
+  async deleteInvestment(id: string, deletedAt: string): Promise<void> {
+    const userId = await requireUserId();
+    const { error } = await supabase
+      .from('investments')
+      .update({ deleted_at: deletedAt, user_id: userId })
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (error) throw error;
+  },
+
+  async pullInvestments(since?: string | null): Promise<ReturnType<typeof fromRemoteInvestment>[]> {
+    const userId = await requireUserId();
+    let query = supabase.from('investments').select('*').eq('user_id', userId);
+    if (since) query = query.gte('updated_at', since);
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingTable(error)) return [];
+      throw error;
+    }
+    return ((data ?? []) as RemoteInvestment[]).map(fromRemoteInvestment);
   },
 
   async pullAccounts(since?: string | null): Promise<ReturnType<typeof fromRemoteAccount>[]> {

@@ -1,24 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { PageScroll } from '@/components/ui/PageScroll';
-import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Select } from '@/components/ui/Select';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { IconButton } from '@/components/ui/IconButton';
+import { ChipRow } from '@/components/ui/Chip';
+import { Amount } from '@/components/ui/Amount';
 import { useTheme } from '@/hooks/useTheme';
 import { useCategoryStore } from '@/store/useCategoryStore';
+import { useSettingsStore } from '@/store/useSettingsStore';
 import { categoryService } from '@/services/categoryService';
+import { reportService } from '@/services/reportService';
+import { getDateRange } from '@/utils/dates';
 import { toUserMessage } from '@/utils/errors';
+import { spacing } from '@/constants/theme';
+
+type CategoryTab = 'all' | 'expense' | 'income';
 
 export default function CategoriesScreen() {
   const { colors } = useTheme();
   const { categories, remove } = useCategoryStore();
+  const currency = useSettingsStore((state) => state.settings.currency);
+  const [spend, setSpend] = useState<Record<string, { amount: number; percent: number }>>({});
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [reassignTo, setReassignTo] = useState<string>('');
   const [needsReassign, setNeedsReassign] = useState(false);
+  const [tab, setTab] = useState<CategoryTab>('all');
+  const visible = useMemo(
+    () => categories.filter((item) => tab === 'all' || item.type === tab || item.type === 'both'),
+    [categories, tab]
+  );
+
+  useEffect(() => {
+    void reportService.analytics(getDateRange('this_month')).then((data) => {
+      setSpend(Object.fromEntries(data.categories.map((item) => [item.categoryId, { amount: item.amount, percent: item.percent }])));
+    });
+  }, []);
 
   const requestDelete = async (id: string) => {
     const usage = await categoryService.usage(id);
@@ -30,19 +52,37 @@ export default function CategoriesScreen() {
   return (
     <Screen padded={false}>
       <PageScroll style={styles.scroller} contentContainerStyle={styles.content}>
-        <Button title="Add category" onPress={() => router.push('/categories/add')} />
-        <Card>
-          {categories.map((item) => (
+        <PageHeader
+          title="Categories"
+          action={<IconButton name="add" accessibilityLabel="Add category" onPress={() => router.push('/categories/add')} />}
+        />
+        <ChipRow
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'expense', label: 'Expenses' },
+            { value: 'income', label: 'Income' },
+          ]}
+        />
+        <Card elevated={false} style={styles.card}>
+          {visible.map((item, index) => (
             <Pressable
               key={item.id}
               onPress={() => router.push({ pathname: '/categories/edit', params: { id: item.id } })}
-              style={styles.row}
+              style={[styles.row, index < visible.length - 1 && { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
             >
               <CategoryIcon icon={item.icon} color={item.color} />
               <View style={styles.body}>
                 <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{item.name}</Text>
                 <Text style={{ color: colors.textSecondary }}>{item.type}{item.isDefault ? ' · Default' : ''}</Text>
               </View>
+              {spend[item.id] ? (
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Amount minor={spend[item.id].amount} currency={currency} size="sm" />
+                  <Text style={{ color: colors.textTertiary, fontSize: 12 }}>{spend[item.id].percent}% of spending</Text>
+                </View>
+              ) : null}
               {!item.isDefault ? (
                 <Text style={{ color: colors.danger, fontWeight: '700' }} onPress={() => void requestDelete(item.id)}>
                   Delete
@@ -102,8 +142,9 @@ export default function CategoriesScreen() {
 
 const styles = StyleSheet.create({
   scroller: { flex: 1, minHeight: 0 },
-  content: { padding: 16, gap: 16 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  content: { padding: spacing.lg, gap: spacing.md },
+  card: { paddingVertical: 4, paddingHorizontal: 8 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 10, paddingHorizontal: 8 },
   body: { flex: 1 },
-  reassign: { padding: 16 },
+  reassign: { padding: spacing.lg },
 });

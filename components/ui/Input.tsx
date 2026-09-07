@@ -19,7 +19,7 @@ export function Input({ label, error, ...props }: InputProps) {
         style={[
           styles.input,
           {
-            backgroundColor: colors.surface,
+            backgroundColor: colors.surfaceSecondary,
             color: colors.textPrimary,
             borderColor: error ? colors.danger : colors.border,
             outlineColor: colors.primary,

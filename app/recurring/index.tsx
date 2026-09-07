@@ -3,17 +3,19 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { PageScroll } from '@/components/ui/PageScroll';
-import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { LoadingState } from '@/components/ui/LoadingState';
+import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { IconButton } from '@/components/ui/IconButton';
+import { Amount } from '@/components/ui/Amount';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { recurringService } from '@/services/recurringService';
 import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore } from '@/store/useSettingsStore';
-import { formatMoney } from '@/utils/currency';
 import { formatDisplayDate } from '@/utils/dates';
 import { frequencyLabel } from '@/utils/constants';
+import { spacing } from '@/constants/theme';
 import type { RecurringTransactionWithCategory } from '@/types';
 
 export default function RecurringListScreen() {
@@ -32,12 +34,16 @@ export default function RecurringListScreen() {
     void load();
   }, [load]);
 
-  if (loading) return <LoadingState />;
+  if (loading) return <ScreenSkeleton variant="list" />;
 
   return (
     <Screen padded={false}>
       <PageScroll style={styles.scroller} contentContainerStyle={styles.content}>
-        <Button title="Add recurring" onPress={() => router.push('/recurring/add')} />
+        <PageHeader
+          title="Recurring"
+          subtitle="Scheduled bills and transfers"
+          action={<IconButton name="add" accessibilityLabel="Add recurring" onPress={() => router.push('/recurring/add')} />}
+        />
         {items.length === 0 ? (
           <EmptyState
             icon="repeat-outline"
@@ -49,19 +55,19 @@ export default function RecurringListScreen() {
         ) : (
           items.map((item) => (
             <Pressable key={item.id} onPress={() => router.push(`/recurring/${item.id}`)}>
-              <Card>
+              <Card elevated={false}>
                 <View style={styles.row}>
                   <CategoryIcon icon={item.categoryIcon} color={item.categoryColor} />
                   <View style={styles.body}>
                     <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{item.title}</Text>
                     <Text style={{ color: colors.textSecondary }}>
-                      {frequencyLabel(item.frequency)} · Next: {formatDisplayDate(item.nextDate)}
+                      {frequencyLabel(item.frequency)} · Next {formatDisplayDate(item.nextDate)}
                     </Text>
-                    <Text style={{ color: item.isActive ? colors.success : colors.textTertiary }}>
+                    <Text style={{ color: item.isActive ? colors.success : colors.textTertiary, fontWeight: '600' }}>
                       {item.isActive ? 'Active' : 'Paused'}
                     </Text>
                   </View>
-                  <Text style={{ color: colors.textPrimary, fontWeight: '800' }}>{formatMoney(item.amount, currency)}</Text>
+                  <Amount minor={item.amount} currency={currency} type={item.type} size="sm" />
                 </View>
               </Card>
             </Pressable>
@@ -74,7 +80,7 @@ export default function RecurringListScreen() {
 
 const styles = StyleSheet.create({
   scroller: { flex: 1, minHeight: 0 },
-  content: { padding: 16, gap: 12 },
+  content: { padding: spacing.lg, gap: 12 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   body: { flex: 1 },
 });

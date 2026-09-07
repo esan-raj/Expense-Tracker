@@ -5,14 +5,15 @@ import { useTheme } from '@/hooks/useTheme';
 interface Point {
   date: string;
   amount: number;
+  label?: string;
 }
 
-export function BarChart({ data }: { data: Point[] }) {
+export function BarChart({ data, height = 140 }: { data: Point[]; height?: number }) {
   const { colors } = useTheme();
   const max = Math.max(...data.map((item) => item.amount), 1);
 
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, { height }]}>
       {data.map((item) => (
         <View key={item.date} style={styles.col}>
           <View style={[styles.track, { backgroundColor: colors.progressTrack }]}>
@@ -26,7 +27,9 @@ export function BarChart({ data }: { data: Point[] }) {
               ]}
             />
           </View>
-          <Text style={[styles.label, { color: colors.textSecondary }]}>{format(parseISO(item.date), 'EEEEE')}</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>
+            {item.label ?? format(parseISO(item.date), 'EEEEE')}
+          </Text>
         </View>
       ))}
     </View>

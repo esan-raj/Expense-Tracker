@@ -20,8 +20,8 @@ export default function TabsLayout() {
           : {
               backgroundColor: colors.tabBar,
               borderTopColor: colors.border,
-              height: 64,
-              paddingBottom: 8,
+              height: 66,
+              paddingBottom: 10,
               paddingTop: 8,
             },
         tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
@@ -49,19 +49,21 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="reports"
+        name="portfolio"
         options={{
-          title: 'Reports',
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart" color={color} size={size} />,
+          title: 'Investments',
+          tabBarIcon: ({ color, size }) => <Ionicons name="trending-up" color={color} size={size} />,
         }}
       />
       <Tabs.Screen
-        name="settings"
+        name="more"
         options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, size }) => <Ionicons name="settings" color={color} size={size} />,
+          title: 'More',
+          tabBarIcon: ({ color, size }) => <Ionicons name="menu" color={color} size={size} />,
         }}
       />
+      <Tabs.Screen name="reports" options={{ href: null }} />
+      <Tabs.Screen name="settings" options={{ href: null }} />
     </Tabs>
   );
 }

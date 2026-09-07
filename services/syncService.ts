@@ -7,6 +7,7 @@ import { categoryRepository } from '@/database/repositories/categoryRepository';
 import { budgetRepository } from '@/database/repositories/budgetRepository';
 import { recurringRepository } from '@/database/repositories/recurringRepository';
 import { accountRepository } from '@/database/repositories/accountRepository';
+import { investmentRepository } from '@/database/repositories/investmentRepository';
 import { settingsRepository } from '@/database/repositories/settingsRepository';
 import { syncQueueRepository, syncStateRepository } from '@/database/repositories/syncQueueRepository';
 import { getCurrentUserId, setCurrentUserId } from '@/database/session';
@@ -37,7 +38,7 @@ async function isOnline(): Promise<boolean> {
 }
 
 async function applyRemoteRecord(
-  entity: 'transaction' | 'category' | 'budget' | 'recurring' | 'account',
+  entity: 'transaction' | 'category' | 'budget' | 'recurring' | 'account' | 'investment',
   remote: { id: string; updatedAt: string; deletedAt?: string | null }
 ) {
   const local =
@@ -49,6 +50,8 @@ async function applyRemoteRecord(
           ? await budgetRepository.getByIdIncludingDeleted(remote.id)
           : entity === 'recurring'
           ? await recurringRepository.getByIdIncludingDeleted(remote.id)
+          : entity === 'investment'
+            ? await investmentRepository.getByIdIncludingDeleted(remote.id)
           : await accountRepository.getByIdIncludingDeleted(remote.id);
 
   if (local) {
@@ -66,6 +69,7 @@ async function applyRemoteRecord(
   if (entity === 'budget') await budgetRepository.upsertFromRemote(remote as never);
   if (entity === 'recurring') await recurringRepository.upsertFromRemote(remote as never);
   if (entity === 'account') await accountRepository.upsertFromRemote(remote as never);
+  if (entity === 'investment') await investmentRepository.upsertFromRemote(remote as never);
 }
 
 export const syncService = {
@@ -77,25 +81,30 @@ export const syncService = {
       budgetRepository.claimUnassigned(userId),
       recurringRepository.claimUnassigned(userId),
       accountRepository.claimUnassigned(userId),
+      investmentRepository.claimUnassigned(userId),
     ]);
     await syncStateRepository.save({ userId });
+    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    await categoryDedupeService.apply();
     await this.queueExistingLocal();
   },
 
   async queueExistingLocal(): Promise<void> {
     const userId = getCurrentUserId();
     if (!userId) return;
-    const [transactions, categories, budgets, recurring, accounts, settings] = await Promise.all([
+    const [transactions, categories, budgets, recurring, accounts, investments, settings] = await Promise.all([
       transactionRepository.exportAll(),
       categoryRepository.list(),
       budgetRepository.exportAll(),
       recurringRepository.exportAll(),
       accountRepository.list(true),
+      investmentRepository.list(),
       settingsRepository.get(),
     ]);
     await Promise.all([
       ...categories.map((item) => syncQueueRepository.enqueue('category', item.id, 'update', item)),
       ...accounts.map((item) => syncQueueRepository.enqueue('account', item.id, 'update', item)),
+      ...investments.map((item) => syncQueueRepository.enqueue('investment', item.id, 'update', item)),
       ...recurring.map((item) => syncQueueRepository.enqueue('recurring', item.id, 'update', item)),
       ...transactions.map((item) => syncQueueRepository.enqueue('transaction', item.id, 'update', item)),
       ...budgets.map((item) => syncQueueRepository.enqueue('budget', item.id, 'update', item)),
@@ -116,12 +125,14 @@ export const syncService = {
           if (item.entityType === 'budget') await remoteApi.deleteBudget(item.entityId, deletedAt);
           if (item.entityType === 'recurring') await remoteApi.deleteRecurring(item.entityId, deletedAt);
           if (item.entityType === 'account') await remoteApi.deleteAccount(item.entityId, deletedAt);
+          if (item.entityType === 'investment') await remoteApi.deleteInvestment(item.entityId, deletedAt);
         } else {
           if (item.entityType === 'transaction') await remoteApi.upsertTransaction(payload as never);
           if (item.entityType === 'category') await remoteApi.upsertCategory(payload as never);
           if (item.entityType === 'budget') await remoteApi.upsertBudget(payload as never);
           if (item.entityType === 'recurring') await remoteApi.upsertRecurring(payload as never);
           if (item.entityType === 'account') await remoteApi.upsertAccount(payload as never);
+          if (item.entityType === 'investment') await remoteApi.upsertInvestment(payload as never);
           if (item.entityType === 'profile') await remoteApi.upsertProfile(payload as never);
         }
         await syncQueueRepository.remove(item.id);
@@ -144,16 +155,18 @@ export const syncService = {
     if (!isSupabaseConfigured() || !getCurrentUserId()) return;
     const state = await syncStateRepository.get();
     const since = state.lastSyncedAt;
-    const [transactions, categories, budgets, recurring, accounts, profile] = await Promise.all([
+    const [transactions, categories, budgets, recurring, accounts, investments, profile] = await Promise.all([
       remoteApi.pullTransactions(since),
       remoteApi.pullCategories(since),
       remoteApi.pullBudgets(since),
       remoteApi.pullRecurring(since),
       remoteApi.pullAccounts(since),
+      remoteApi.pullInvestments(since),
       remoteApi.pullProfile(),
     ]);
 
     for (const item of accounts) await applyRemoteRecord('account', item);
+    for (const item of investments) await applyRemoteRecord('investment', item);
     for (const item of categories) await applyRemoteRecord('category', item);
     for (const item of recurring) await applyRemoteRecord('recurring', item);
     for (const item of transactions) await applyRemoteRecord('transaction', item);
@@ -172,6 +185,8 @@ export const syncService = {
           await categoryRepository.hide(category.id);
         }
       }
+      const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+      await categoryDedupeService.apply();
     }
 
     if (profile) {
@@ -196,19 +211,23 @@ export const syncService = {
   },
 
   async replaceLocalFromRemote(): Promise<void> {
-    const [transactions, categories, budgets, recurring, accounts] = await Promise.all([
+    const [transactions, categories, budgets, recurring, accounts, investments] = await Promise.all([
       remoteApi.pullTransactions(null),
       remoteApi.pullCategories(null),
       remoteApi.pullBudgets(null),
       remoteApi.pullRecurring(null),
       remoteApi.pullAccounts(null),
+      remoteApi.pullInvestments(null),
     ]);
     await accountRepository.replaceAll(accounts.filter((item) => !item.deletedAt));
+    await investmentRepository.replaceAll(investments.filter((item) => !item.deletedAt));
     await categoryRepository.replaceAll(categories.filter((item) => !item.deletedAt));
     await recurringRepository.replaceAll(recurring.filter((item) => !item.deletedAt));
     await transactionRepository.replaceAll(transactions.filter((item) => !item.deletedAt));
     await budgetRepository.replaceAll(budgets.filter((item) => !item.deletedAt));
     await syncQueueRepository.clear();
+    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    await categoryDedupeService.apply();
   },
 
   async syncPendingChanges(): Promise<void> {
@@ -265,6 +284,9 @@ export const syncService = {
         void this.pullRemoteChanges().then(onChange);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts', filter: `user_id=eq.${userId}` }, () => {
+        void this.pullRemoteChanges().then(onChange);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investments', filter: `user_id=eq.${userId}` }, () => {
         void this.pullRemoteChanges().then(onChange);
       })
       .on(

@@ -8,20 +8,34 @@ interface Slice {
   label: string;
   amount: number;
   color: string;
-  percent: number;
+  percent?: number;
 }
 
-export function DonutChart({ slices, size = 180 }: { slices: Slice[]; size?: number }) {
+export function DonutChart({
+  slices,
+  size = 180,
+  centerLabel = 'Spent',
+  centerValue,
+}: {
+  slices: Slice[];
+  size?: number;
+  centerLabel?: string;
+  centerValue?: number;
+}) {
   const { colors } = useTheme();
   const currency = useSettingsStore((state) => state.settings.currency);
-  const stroke = 22;
+  const stroke = size < 140 ? 14 : 22;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
+  const safeSlices = slices
+    .map((slice) => ({ ...slice, amount: Number.isFinite(slice.amount) ? Math.max(0, slice.amount) : 0 }))
+    .filter((slice) => slice.amount > 0);
+  const total = safeSlices.reduce((sum, item) => sum + item.amount, 0);
+  const displayValue = centerValue != null && Number.isFinite(centerValue) ? Math.max(0, centerValue) : total;
   let offset = 0;
-  const total = slices.reduce((sum, item) => sum + item.amount, 0);
 
   return (
-    <View style={styles.wrap}>
+    <View style={styles.wrap} accessibilityLabel={`${centerLabel} ${formatMoney(displayValue, currency)}`}>
       <View style={{ width: size, height: size }}>
         <Svg width={size} height={size}>
           <G transform={`rotate(-90 ${size / 2} ${size / 2})`}>
@@ -33,8 +47,9 @@ export function DonutChart({ slices, size = 180 }: { slices: Slice[]; size?: num
               strokeWidth={stroke}
               fill="none"
             />
-            {slices.map((slice) => {
-              const length = (slice.percent / 100) * circumference;
+            {safeSlices.map((slice) => {
+              const percent = total > 0 ? (slice.amount / total) * 100 : 0;
+              const length = (percent / 100) * circumference;
               const circle = (
                 <Circle
                   key={slice.label}
@@ -44,7 +59,7 @@ export function DonutChart({ slices, size = 180 }: { slices: Slice[]; size?: num
                   stroke={slice.color}
                   strokeWidth={stroke}
                   fill="none"
-                  strokeDasharray={`${length} ${circumference - length}`}
+                  strokeDasharray={`${length} ${Math.max(0, circumference - length)}`}
                   strokeDashoffset={-offset}
                   strokeLinecap="round"
                 />
@@ -55,8 +70,10 @@ export function DonutChart({ slices, size = 180 }: { slices: Slice[]; size?: num
           </G>
         </Svg>
         <View style={styles.center}>
-          <Text style={[styles.centerLabel, { color: colors.textSecondary }]}>Spent</Text>
-          <Text style={[styles.centerValue, { color: colors.textPrimary }]}>{formatMoney(total, currency)}</Text>
+          <Text style={[styles.centerLabel, { color: colors.textSecondary, fontSize: size < 140 ? 11 : 12 }]}>{centerLabel}</Text>
+          <Text style={[styles.centerValue, { color: colors.textPrimary, fontSize: size < 140 ? 13 : 16 }]}>
+            {formatMoney(displayValue, currency)}
+          </Text>
         </View>
       </View>
     </View>
@@ -66,6 +83,6 @@ export function DonutChart({ slices, size = 180 }: { slices: Slice[]; size?: num
 const styles = StyleSheet.create({
   wrap: { alignItems: 'center' },
   center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
-  centerLabel: { fontSize: 12, fontWeight: '600' },
-  centerValue: { fontSize: 16, fontWeight: '800' },
+  centerLabel: { fontWeight: '600' },
+  centerValue: { fontWeight: '800' },
 });

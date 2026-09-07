@@ -2,6 +2,7 @@ import { getRxDatabase } from '@/database';
 import { compareValues } from '@/database/helpers';
 import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
 import type { Category, CategoryInput, CategoryType } from '@/types';
+import { categoryIdentityKey } from '@/utils/categoryDedupe';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
 import { mapCategory } from './mappers';
@@ -30,7 +31,17 @@ export const categoryRepository = {
     return row && !row.deletedAt ? toCategory(row) : null;
   },
 
+  async findActiveByIdentity(name: string, type: CategoryType, exceptId?: string): Promise<Category | null> {
+    const needle = categoryIdentityKey(name, type);
+    const rows = await this.list();
+    return rows.find((item) => item.id !== exceptId && categoryIdentityKey(item.name, item.type) === needle) ?? null;
+  },
+
   async create(input: CategoryInput): Promise<Category> {
+    const existing = await this.findActiveByIdentity(input.name, input.type);
+    if (existing) {
+      throw new Error(`A ${input.type} category named "${input.name.trim()}" already exists.`);
+    }
     const db = await getRxDatabase();
     const id = createId();
     const timestamp = nowIso();
@@ -50,6 +61,10 @@ export const categoryRepository = {
   },
 
   async update(id: string, input: CategoryInput): Promise<Category> {
+    const existing = await this.findActiveByIdentity(input.name, input.type, id);
+    if (existing) {
+      throw new Error(`A ${input.type} category named "${input.name.trim()}" already exists.`);
+    }
     const db = await getRxDatabase();
     const row = await db.categories.findOne(id).exec();
     if (!row) throw new Error('Category not found');

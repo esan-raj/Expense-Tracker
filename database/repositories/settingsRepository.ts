@@ -2,6 +2,7 @@ import { getRxDatabase } from '@/database';
 import { DEFAULT_CURRENCY } from '@/constants/currencies';
 import type { AppSettings, SettingsUpdate } from '@/types';
 import { SETTINGS_ID } from '@/utils/constants';
+import { DEFAULT_ACCENT_COLOR, DEFAULT_ACCENT_PRESET } from '@/utils/accent';
 import { mapSettings } from './mappers';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -9,6 +10,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   currency: DEFAULT_CURRENCY.code,
   currencySymbol: DEFAULT_CURRENCY.symbol,
   theme: 'system',
+  accentPreset: DEFAULT_ACCENT_PRESET,
+  accentColor: DEFAULT_ACCENT_COLOR,
   firstDayOfWeek: 1,
   monthlyBudget: null,
   onboardingComplete: false,
@@ -35,6 +38,8 @@ export const settingsRepository = {
       currency: next.currency,
       currencySymbol: next.currencySymbol,
       theme: next.theme,
+      accentPreset: next.accentPreset,
+      accentColor: next.accentColor,
       firstDayOfWeek: next.firstDayOfWeek,
       monthlyBudget: next.monthlyBudget ?? 0,
       onboardingComplete: next.onboardingComplete,

@@ -37,7 +37,7 @@ export default function OnboardingScreen() {
         {step === 0 ? (
           <>
             <Text style={[styles.kicker, { color: colors.primary }]}>SpendWise</Text>
-            <Text style={[styles.title, { color: colors.textPrimary }]}>Take control of your money.</Text>
+            <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
             <Text style={[styles.copy, { color: colors.textSecondary }]}>
               Track spending, set budgets, and understand your finances — all stored privately on your device.
             </Text>

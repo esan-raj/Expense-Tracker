@@ -50,6 +50,8 @@ export interface TransactionFilters {
   maxAmount?: number;
   search?: string;
   accountId?: string;
+  isTransfer?: boolean;
+  categoryIds?: string[];
 }
 
 export type TransactionSort = 'newest' | 'oldest' | 'highest' | 'lowest';

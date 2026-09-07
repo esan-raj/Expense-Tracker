@@ -3,8 +3,9 @@ import { settingsRepository } from '@/database/repositories/settingsRepository';
 import { queueChange } from '@/services/outbox';
 import { getCurrentUserId } from '@/database/session';
 import { getCurrency } from '@/constants/currencies';
-import type { AppSettings, CurrencyCode, SettingsUpdate, ThemePreference } from '@/types';
+import type { AppSettings, AccentPreset, CurrencyCode, SettingsUpdate, ThemePreference } from '@/types';
 import { DEFAULT_CURRENCY } from '@/constants/currencies';
+import { ACCENT_PRESETS, DEFAULT_ACCENT_COLOR, DEFAULT_ACCENT_PRESET, normalizeHex } from '@/utils/accent';
 
 interface SettingsState {
   settings: AppSettings;
@@ -13,6 +14,7 @@ interface SettingsState {
   update: (update: SettingsUpdate) => Promise<void>;
   setCurrency: (code: CurrencyCode) => Promise<void>;
   setTheme: (theme: ThemePreference) => Promise<void>;
+  setAccent: (preset: AccentPreset, customHex?: string) => Promise<void>;
 }
 
 const fallback: AppSettings = {
@@ -20,6 +22,8 @@ const fallback: AppSettings = {
   currency: DEFAULT_CURRENCY.code,
   currencySymbol: DEFAULT_CURRENCY.symbol,
   theme: 'system',
+  accentPreset: DEFAULT_ACCENT_PRESET,
+  accentColor: DEFAULT_ACCENT_COLOR,
   firstDayOfWeek: 1,
   monthlyBudget: null,
   onboardingComplete: false,
@@ -52,6 +56,16 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setTheme: async (theme) => {
     const settings = await settingsRepository.update({ theme });
+    const userId = getCurrentUserId();
+    if (userId) await queueChange('profile', userId, 'update', settings);
+    set({ settings });
+  },
+  setAccent: async (preset, customHex) => {
+    const resolved =
+      preset === 'custom'
+        ? normalizeHex(customHex ?? '') ?? DEFAULT_ACCENT_COLOR
+        : (ACCENT_PRESETS.find((item) => item.id === preset)?.light ?? DEFAULT_ACCENT_COLOR);
+    const settings = await settingsRepository.update({ accentPreset: preset, accentColor: resolved });
     const userId = getCurrentUserId();
     if (userId) await queueChange('profile', userId, 'update', settings);
     set({ settings });

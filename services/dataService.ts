@@ -5,6 +5,7 @@ import { categoryRepository } from '@/database/repositories/categoryRepository';
 import { budgetRepository } from '@/database/repositories/budgetRepository';
 import { recurringRepository } from '@/database/repositories/recurringRepository';
 import { accountRepository } from '@/database/repositories/accountRepository';
+import { investmentRepository } from '@/database/repositories/investmentRepository';
 import { syncService } from '@/services/syncService';
 import { queueChange } from '@/services/outbox';
 import { getCurrentUserId } from '@/database/session';
@@ -48,6 +49,7 @@ export const dataService = {
           budgetRepository.claimUnassigned(userId),
           recurringRepository.claimUnassigned(userId),
           accountRepository.claimUnassigned(userId),
+          investmentRepository.claimUnassigned(userId),
         ]);
       }
       await syncService.queueExistingLocal();

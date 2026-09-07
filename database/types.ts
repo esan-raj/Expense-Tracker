@@ -86,6 +86,8 @@ export interface SettingsDoc {
   currency: string;
   currencySymbol: string;
   theme: string;
+  accentPreset: string;
+  accentColor: string;
   firstDayOfWeek: number;
   monthlyBudget: number;
   onboardingComplete: boolean;
@@ -103,6 +105,21 @@ export interface SyncQueueDoc {
   lastError: string;
 }
 
+export interface InvestmentDoc {
+  id: string;
+  userId: string;
+  name: string;
+  type: string;
+  investedAmount: number;
+  currentValue: number;
+  investmentDate: string;
+  accountId: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string;
+}
+
 export interface SyncStateDoc {
   id: string;
   userId: string;
@@ -118,6 +135,7 @@ export type SpendWiseCollections = {
   budgets: RxCollection<BudgetDoc>;
   recurring: RxCollection<RecurringDoc>;
   settings: RxCollection<SettingsDoc>;
+  investments: RxCollection<InvestmentDoc>;
   syncQueue: RxCollection<SyncQueueDoc>;
   syncState: RxCollection<SyncStateDoc>;
 };

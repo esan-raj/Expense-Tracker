@@ -46,6 +46,31 @@ export function signedAccountDelta(accountType: AccountType, entry: AccountLedge
   return 0;
 }
 
+export function calculateAssetExpenditure(entries: AccountLedgerEntry[]): number {
+  return entries.reduce((sum, entry) => {
+    if (entry.isTransfer || entry.type !== 'expense') return sum;
+    return sum + Math.max(0, entry.amount);
+  }, 0);
+}
+
+export function accountOverviewSlices(
+  account: Pick<Account, 'type' | 'creditLimit'> & AccountBalances,
+  expenditure: number
+): { used: number; remaining: number; usedLabel: string; remainingLabel: string; centerLabel: string } {
+  if (isLiabilityAccount(account.type)) {
+    const used = Math.max(0, account.outstanding);
+    const remaining = Math.max(0, account.availableCredit ?? Math.max(0, (account.creditLimit ?? 0) - used));
+    return { used, remaining, usedLabel: 'Used', remainingLabel: 'Left', centerLabel: 'Limit' };
+  }
+  return {
+    used: Math.max(0, expenditure),
+    remaining: Math.max(0, account.currentBalance),
+    usedLabel: 'Spent',
+    remainingLabel: 'Left',
+    centerLabel: 'Balance',
+  };
+}
+
 export function calculateAccountBalances(
   account: Pick<Account, 'type' | 'openingBalance' | 'creditLimit'>,
   entries: AccountLedgerEntry[]
@@ -58,6 +83,31 @@ export function calculateAccountBalances(
   }
   const currentBalance = account.openingBalance + movement;
   return { currentBalance, outstanding: 0, availableCredit: null };
+}
+
+export interface CreditCardSummary {
+  creditLimit: number | null;
+  currentOutstanding: number;
+  availableCredit: number | null;
+  utilizationPercent: number | null;
+  cycleSpending: number;
+}
+
+export function getCreditCardSummary(
+  account: Pick<Account, 'type' | 'openingBalance' | 'creditLimit'>,
+  entries: AccountLedgerEntry[]
+): CreditCardSummary {
+  const balances = calculateAccountBalances(account, entries);
+  const cycleSpending = calculateAssetExpenditure(entries);
+  const limit = account.creditLimit;
+  return {
+    creditLimit: limit ?? null,
+    currentOutstanding: balances.outstanding,
+    availableCredit: balances.availableCredit,
+    utilizationPercent:
+      limit && limit > 0 ? Math.round((balances.outstanding / limit) * 10000) / 100 : null,
+    cycleSpending,
+  };
 }
 
 export function summarizeAccounts(accounts: Array<Account & { entries: AccountLedgerEntry[] }>) {

@@ -7,7 +7,7 @@ export default function PrivacyScreen() {
   const { colors } = useTheme();
   return (
     <Screen scroll>
-      <Card>
+      <Card elevated={false}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Your data stays on this device</Text>
         <Text style={[styles.copy, { color: colors.textSecondary }]}>
           SpendWise stores transactions, budgets, and settings in a local RxDB database first. If you sign in,
@@ -23,6 +23,6 @@ export default function PrivacyScreen() {
 }
 
 const styles = StyleSheet.create({
-  title: { fontSize: 22, fontWeight: '800', marginBottom: 12 },
+  title: { fontSize: 22, fontWeight: '800', marginBottom: 12, letterSpacing: -0.3 },
   copy: { lineHeight: 24, marginBottom: 12 },
 });

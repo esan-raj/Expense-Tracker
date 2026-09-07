@@ -1,89 +1,109 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { ChipRow } from '@/components/ui/Chip';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Amount } from '@/components/ui/Amount';
+import { Card } from '@/components/ui/Card';
+import { IconButton } from '@/components/ui/IconButton';
 import { useTheme } from '@/hooks/useTheme';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
-import { formatMoney } from '@/utils/currency';
 import { accountIcon, accountTypeLabel, isLiabilityAccount } from '@/utils/accountLogic';
-import { useBreakpoint } from '@/hooks/useBreakpoint';
+import { radius, spacing } from '@/constants/theme';
+
+type AccountTab = 'all' | 'bank' | 'credit_card' | 'investment' | 'cash';
 
 export default function AccountsScreen() {
   const { colors } = useTheme();
-  const { isWide } = useBreakpoint();
   const accounts = useAccountStore((state) => state.accounts);
   const load = useAccountStore((state) => state.load);
   const currency = useSettingsStore((state) => state.settings.currency);
+  const [tab, setTab] = useState<AccountTab>('all');
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const banks = accounts.filter((item) => !isLiabilityAccount(item.type));
-  const cards = accounts.filter((item) => isLiabilityAccount(item.type));
+  const visible = useMemo(() => {
+    if (tab === 'all') return accounts;
+    if (tab === 'bank') return accounts.filter((item) => item.type === 'bank' || item.type === 'wallet' || item.type === 'other');
+    return accounts.filter((item) => item.type === tab);
+  }, [accounts, tab]);
 
   return (
     <Screen scroll>
-      <Button title="+ Add Account" onPress={() => router.push('/accounts/add')} />
+      <PageHeader
+        title="Accounts"
+        action={<IconButton name="add" accessibilityLabel="Add account" onPress={() => router.push('/accounts/add')} />}
+      />
+      <ChipRow
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'all', label: 'All' },
+          { value: 'bank', label: 'Bank' },
+          { value: 'credit_card', label: 'Credit cards' },
+          { value: 'investment', label: 'Investments' },
+          { value: 'cash', label: 'Cash' },
+        ]}
+      />
       {accounts.length === 0 ? (
         <EmptyState
           title="No accounts yet"
           message="Add a bank account or credit card. Existing transactions stay available until you assign them."
+          actionLabel="+ Add account"
+          onAction={() => router.push('/accounts/add')}
         />
-      ) : null}
-      {banks.length > 0 ? (
-        <Card>
-          <Text style={[styles.heading, { color: colors.textPrimary }]}>Bank Accounts</Text>
-          <View style={isWide ? styles.grid : undefined}>
-          {banks.map((item) => (
-            <Pressable key={item.id} onPress={() => router.push(`/accounts/${item.id}` as never)} style={[styles.row, isWide && styles.tile]}>
-              <Ionicons name={accountIcon(item.type)} size={22} color={colors.primary} />
-              <View style={styles.flex}>
-                <Text style={[styles.name, { color: colors.textPrimary }]}>{item.name}</Text>
-                <Text style={{ color: colors.textSecondary }}>{accountTypeLabel(item.type)}</Text>
-              </View>
-              <Text style={[styles.amount, { color: colors.textPrimary }]}>{formatMoney(item.currentBalance, currency)}</Text>
-            </Pressable>
-          ))}
-          </View>
+      ) : visible.length === 0 ? (
+        <EmptyState title="Nothing in this tab" message="Try another account type, or add a new account." />
+      ) : (
+        <Card elevated={false} style={styles.list}>
+          {visible.map((item, index) => {
+            const liability = isLiabilityAccount(item.type);
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => router.push(`/accounts/${item.id}` as never)}
+                accessibilityRole="button"
+                accessibilityLabel={item.name}
+                style={[styles.row, index < visible.length - 1 && { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+              >
+                <View style={[styles.icon, { backgroundColor: colors.primaryMuted }]}>
+                  <Ionicons name={accountIcon(item.type)} size={18} color={colors.primary} />
+                </View>
+                <View style={styles.body}>
+                  <Text style={[styles.name, { color: colors.textPrimary }]}>{item.name}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{accountTypeLabel(item.type)}</Text>
+                </View>
+                <View style={styles.right}>
+                  <Amount
+                    minor={liability ? item.outstanding : item.currentBalance}
+                    currency={currency}
+                    size="sm"
+                  />
+                  {liability && item.utilizationPercent != null ? (
+                    <Text style={{ color: colors.textTertiary, fontSize: 12 }}>{item.utilizationPercent.toFixed(2)}% used</Text>
+                  ) : null}
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </Pressable>
+            );
+          })}
         </Card>
-      ) : null}
-      {cards.length > 0 ? (
-        <Card>
-          <Text style={[styles.heading, { color: colors.textPrimary }]}>Credit Cards</Text>
-          <View style={isWide ? styles.grid : undefined}>
-          {cards.map((item) => (
-            <Pressable key={item.id} onPress={() => router.push(`/accounts/${item.id}` as never)} style={[styles.row, isWide && styles.tile]}>
-              <Ionicons name="card" size={22} color={colors.primary} />
-              <View style={styles.flex}>
-                <Text style={[styles.name, { color: colors.textPrimary }]}>{item.name}</Text>
-                <Text style={{ color: colors.textSecondary }}>
-                  {formatMoney(item.outstanding, currency)} outstanding
-                </Text>
-              </View>
-              <Text style={{ color: colors.textSecondary }}>
-                {item.availableCredit != null ? `${formatMoney(item.availableCredit, currency)} available` : ''}
-              </Text>
-            </Pressable>
-          ))}
-          </View>
-        </Card>
-      ) : null}
+      )}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 16, fontWeight: '800', marginBottom: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-  flex: { flex: 1 },
+  list: { paddingVertical: 4, paddingHorizontal: 8, marginTop: spacing.sm },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 64, paddingVertical: 12, paddingHorizontal: 8 },
+  icon: { width: 36, height: 36, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  body: { flex: 1, minWidth: 0 },
   name: { fontWeight: '700', fontSize: 16 },
-  amount: { fontWeight: '800' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tile: { width: '48%', minWidth: 240, padding: 8 },
+  right: { alignItems: 'flex-end' },
 });
