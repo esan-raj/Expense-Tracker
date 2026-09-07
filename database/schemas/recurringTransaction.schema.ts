@@ -1,0 +1,45 @@
+import type { RxJsonSchema } from 'rxdb';
+import { isoDate, stringId } from './common';
+import type { RecurringDoc } from '@/database/types';
+
+export const recurringTransactionSchema: RxJsonSchema<RecurringDoc> = {
+  title: 'recurring',
+  version: 1,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: stringId,
+    userId: stringId,
+    title: { type: 'string', maxLength: 200 },
+    amount: { type: 'integer', minimum: 1, maximum: 9007199254740991, multipleOf: 1 },
+    type: { type: 'string', maxLength: 20 },
+    categoryId: stringId,
+    frequency: { type: 'string', maxLength: 20 },
+    startDate: { type: 'string', maxLength: 20 },
+    nextDate: { type: 'string', maxLength: 20 },
+    paymentMethod: { type: 'string', maxLength: 40 },
+    isActive: { type: 'boolean' },
+    createdAt: isoDate,
+    updatedAt: isoDate,
+    deletedAt: isoDate,
+    accountId: stringId,
+  },
+  required: [
+    'id',
+    'userId',
+    'title',
+    'amount',
+    'type',
+    'categoryId',
+    'frequency',
+    'startDate',
+    'nextDate',
+    'paymentMethod',
+    'isActive',
+    'createdAt',
+    'updatedAt',
+    'deletedAt',
+    'accountId',
+  ],
+  indexes: ['userId', 'deletedAt', 'nextDate', 'categoryId', ['categoryId', 'deletedAt']],
+};

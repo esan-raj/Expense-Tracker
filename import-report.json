@@ -1,0 +1,149 @@
+{
+  "source": "Transaction September.xlsx",
+  "dryRun": true,
+  "generatedAt": "2026-09-06T18:32:26.181Z",
+  "validation": {
+    "ready": true,
+    "sheets": [
+      "Pixcel Play Credit Card",
+      "SBI Bank Account"
+    ],
+    "rowsTotal": 22,
+    "rowsValid": 22,
+    "rowsInvalid": 0,
+    "duplicates": 0,
+    "accounts": 2,
+    "categories": 21,
+    "transactions": 22,
+    "transfers": 1,
+    "budgets": 0,
+    "recurring": 0,
+    "errors": [],
+    "warnings": [
+      {
+        "sheet": "Pixcel Play Credit Card",
+        "row": 0,
+        "message": "Credit-card Brought Forward is treated as available-credit history; opening outstanding is derived so closing available matches the statement."
+      }
+    ],
+    "mapping": [
+      {
+        "excel": "Sheet name / header",
+        "spendwise": "accounts.name + accounts.type",
+        "notes": "Credit Card sheet → credit_card; SBI sheet → bank"
+      },
+      {
+        "excel": "Date (DD/MM/YYYY or Excel date)",
+        "spendwise": "transactions.date",
+        "notes": "Normalized to YYYY-MM-DD; day-first for slash dates"
+      },
+      {
+        "excel": "Details",
+        "spendwise": "transactions.title + description",
+        "notes": "UPI/IMPS merchant extracted for title; raw text kept as description"
+      },
+      {
+        "excel": "Debit",
+        "spendwise": "transactions.amount (expense)",
+        "notes": "Major currency → integer minor units"
+      },
+      {
+        "excel": "Credit",
+        "spendwise": "transactions.amount (income) or transfer destination",
+        "notes": "Bill payment paired with bank debit becomes a transfer"
+      },
+      {
+        "excel": "Balance / Brought Forward",
+        "spendwise": "accounts.openingBalance + creditLimit",
+        "notes": "Validation only for running totals; not stored per transaction"
+      },
+      {
+        "excel": "Ref No/Cheque No",
+        "spendwise": "(unused)",
+        "notes": "Empty in this workbook"
+      }
+    ],
+    "financials": {
+      "bankOpening": 5716958,
+      "bankClosing": 3888781,
+      "bankIncome": 1377391,
+      "bankExpense": 1175280,
+      "cardOpeningOutstanding": 2030288,
+      "cardClosingOutstanding": 432201,
+      "cardLimit": 7000000,
+      "cardAvailable": 6567799,
+      "reportableIncome": 1377391,
+      "reportableExpense": 1607481,
+      "transferTotal": 2030288
+    }
+  },
+  "mapping": [
+    {
+      "excel": "Sheet name / header",
+      "spendwise": "accounts.name + accounts.type",
+      "notes": "Credit Card sheet → credit_card; SBI sheet → bank"
+    },
+    {
+      "excel": "Date (DD/MM/YYYY or Excel date)",
+      "spendwise": "transactions.date",
+      "notes": "Normalized to YYYY-MM-DD; day-first for slash dates"
+    },
+    {
+      "excel": "Details",
+      "spendwise": "transactions.title + description",
+      "notes": "UPI/IMPS merchant extracted for title; raw text kept as description"
+    },
+    {
+      "excel": "Debit",
+      "spendwise": "transactions.amount (expense)",
+      "notes": "Major currency → integer minor units"
+    },
+    {
+      "excel": "Credit",
+      "spendwise": "transactions.amount (income) or transfer destination",
+      "notes": "Bill payment paired with bank debit becomes a transfer"
+    },
+    {
+      "excel": "Balance / Brought Forward",
+      "spendwise": "accounts.openingBalance + creditLimit",
+      "notes": "Validation only for running totals; not stored per transaction"
+    },
+    {
+      "excel": "Ref No/Cheque No",
+      "spendwise": "(unused)",
+      "notes": "Empty in this workbook"
+    }
+  ],
+  "financials": {
+    "bankOpening": 5716958,
+    "bankClosing": 3888781,
+    "bankIncome": 1377391,
+    "bankExpense": 1175280,
+    "cardOpeningOutstanding": 2030288,
+    "cardClosingOutstanding": 432201,
+    "cardLimit": 7000000,
+    "cardAvailable": 6567799,
+    "reportableIncome": 1377391,
+    "reportableExpense": 1607481,
+    "transferTotal": 2030288
+  },
+  "datasetCounts": {
+    "accounts": 2,
+    "categories": 21,
+    "transactions": 22,
+    "transfers": 1,
+    "budgets": 0,
+    "recurring": 0
+  },
+  "supabase": {
+    "attempted": false,
+    "ok": false,
+    "userIdPresent": false,
+    "detail": "not run"
+  },
+  "rxdb": {
+    "attempted": false,
+    "ok": false,
+    "detail": "Local RxDB is updated on the next signed-in app sync (full remote reconcile)."
+  }
+}
