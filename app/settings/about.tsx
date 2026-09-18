@@ -1,17 +1,30 @@
 import { StyleSheet, Text } from 'react-native';
+import * as Updates from 'expo-updates';
 import { Screen } from '@/components/ui/Screen';
 import { Card } from '@/components/ui/Card';
 import { useTheme } from '@/hooks/useTheme';
 import { APP_NAME, APP_VERSION } from '@/utils/constants';
+import { previewUpdateVerificationLabel } from '@/utils/previewUpdateMarker';
 
 export default function AboutScreen() {
   const { colors } = useTheme();
+  const previewVerification = previewUpdateVerificationLabel(Updates.channel);
+
   return (
     <Screen scroll>
       <Card elevated={false}>
         <Text style={[styles.brand, { color: colors.primary }]}>{APP_NAME}</Text>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
         <Text style={{ color: colors.textSecondary, marginBottom: 12 }}>Version {APP_VERSION}</Text>
+        {previewVerification ? (
+          <Text
+            accessibilityRole="text"
+            accessibilityLabel={previewVerification}
+            style={{ color: colors.textSecondary, marginBottom: 12 }}
+          >
+            {previewVerification}
+          </Text>
+        ) : null}
         <Text style={{ color: colors.textPrimary, lineHeight: 24 }}>
           SpendWise is a private, offline-first expense tracker. It helps you record income and spending,
           stay inside monthly budgets, and understand where your money goes.
