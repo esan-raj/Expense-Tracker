@@ -67,6 +67,8 @@ hooks/                 Theme, reports, network status
 utils/                 Currency, dates, calculations, sync logic
 supabase/migrations/   Reproducible PostgreSQL schema
 __tests__/             Unit tests
+docs/                  Release and OTA distribution guide
+.github/workflows/     CI checks and EAS Update publishing
 ```
 
 ## Installation
@@ -183,15 +185,20 @@ Tests cover balance/income/expense math, budget usage, category aggregation, dat
 
 These tests do not call a live Supabase project. Configure `.env` and exercise sign-in, offline edits, and **Sync now** on a device before treating cloud sync as verified.
 
-## Build instructions
+## Build and updates
+
+Standalone Android APKs are built with EAS. Compatible JavaScript can reach an installed APK through EAS Update without reinstalling. Native changes still need a new APK.
+
+See [docs/RELEASE.md](docs/RELEASE.md) for Git branches `development` and `Production`, EAS channels, fingerprint runtime policy, GitHub Actions, secrets, and APK commands.
 
 ```bash
+npx eas-cli@latest build --profile preview --platform android
 npx expo prebuild
 npx expo run:android
 npx expo run:ios
 ```
 
-Or create store builds with EAS after adding an `eas.json` for your account.
+`preview` remains the internal APK workflow. `production-apk` builds a production-channel APK. `production` remains the store AAB profile.
 
 ## Troubleshooting
 

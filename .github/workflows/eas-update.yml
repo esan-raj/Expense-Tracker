@@ -1,0 +1,184 @@
+name: EAS Update
+
+on:
+  push:
+    branches:
+      - development
+      - Production
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npx jest --no-coverage --ci --forceExit
+
+      - name: Expo public config
+        run: npx expo config --type public
+
+  publish:
+    name: publish
+    needs: validate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: eas-update-publish-${{ github.ref_name == 'Production' && 'production' || 'preview' }}
+      cancel-in-progress: false
+    steps:
+      - name: Resolve channel
+        id: target
+        run: |
+          set -euo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+          if [ "$BRANCH" = "development" ]; then
+            CHANNEL="preview"
+            ENVIRONMENT="preview"
+            PROFILE="preview"
+          elif [ "$BRANCH" = "Production" ]; then
+            CHANNEL="production"
+            ENVIRONMENT="production"
+            PROFILE="production-apk"
+          else
+            echo "Refusing to publish from unexpected branch ${BRANCH}."
+            exit 1
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "Git branch ${BRANCH} publishes EAS channel ${CHANNEL} with environment ${ENVIRONMENT}."
+
+      - name: Checkout validated commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Confirm this commit is still the branch tip
+        id: tip
+        run: |
+          set -euo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "$BRANCH"
+          TIP="$(git rev-parse "origin/${BRANCH}")"
+          CHECKED="$(git rev-parse HEAD)"
+          echo "Validated publish SHA: ${GITHUB_SHA}"
+          echo "Checked-out SHA: ${CHECKED}"
+          echo "Branch tip: ${TIP}"
+          if [ "$CHECKED" != "$GITHUB_SHA" ]; then
+            echo "::error::Checked-out commit ${CHECKED} is not the validated SHA ${GITHUB_SHA}."
+            exit 1
+          fi
+          if [ "$TIP" != "$GITHUB_SHA" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping publish so an older queued commit cannot replace ${TIP}."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require EXPO_TOKEN
+        if: ${{ steps.tip.outputs.skip != 'true' }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "Add an EXPO_TOKEN repository secret. Do not commit Expo tokens or expose them to pull-request jobs."
+            exit 1
+          fi
+
+      - name: Setup EAS
+        if: ${{ steps.tip.outputs.skip != 'true' }}
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish compatible EAS Update
+        if: ${{ steps.tip.outputs.skip != 'true' }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CHANNEL: ${{ steps.target.outputs.channel }}
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+          PROFILE: ${{ steps.target.outputs.profile }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "$BRANCH"
+          TIP="$(git rev-parse "origin/${BRANCH}")"
+          CHECKED="$(git rev-parse HEAD)"
+          if [ "$CHECKED" != "$GITHUB_SHA" ] || [ "$TIP" != "$GITHUB_SHA" ]; then
+            echo "Skipping publish immediately before eas update. tip=${TIP} checked=${CHECKED} sha=${GITHUB_SHA}"
+            exit 0
+          fi
+          echo "Publishing ${GIT_SHA} to channel ${CHANNEL} with environment ${ENVIRONMENT}."
+          echo "Generating Android fingerprint for profile ${PROFILE}..."
+          FINGERPRINT_JSON="$(eas fingerprint:generate --platform android --build-profile "$PROFILE" --json --non-interactive)"
+          HASH="$(
+            node -e '
+              const fs = require("fs");
+              const raw = fs.readFileSync(0, "utf8").trim();
+              const parsed = JSON.parse(raw);
+              const hash = parsed.hash || parsed.fingerprintHash || parsed.fingerprint?.hash;
+              if (!hash) {
+                console.error("Could not read fingerprint hash from eas fingerprint:generate JSON.");
+                process.exit(1);
+              }
+              process.stdout.write(String(hash));
+            ' <<<"$FINGERPRINT_JSON"
+          )"
+          echo "Android fingerprint: ${HASH}"
+          BUILDS_JSON="$(eas build:list --platform android --fingerprint-hash "$HASH" --status finished --limit 20 --json --non-interactive)"
+          MATCH_COUNT="$(
+            node -e '
+              const fs = require("fs");
+              const raw = fs.readFileSync(0, "utf8").trim() || "[]";
+              const parsed = JSON.parse(raw);
+              const builds = Array.isArray(parsed) ? parsed : parsed.builds || parsed.data || [];
+              process.stdout.write(String(builds.length));
+            ' <<<"$BUILDS_JSON"
+          )"
+          if [ "$MATCH_COUNT" -eq 0 ]; then
+            echo "::error::No finished Android build matches fingerprint ${HASH}."
+            echo "This JavaScript change requires a new native runtime/build."
+            echo "Installed APKs on channel ${CHANNEL} will not receive it."
+            echo "Build and install a replacement binary with the same package id and signing identity:"
+            echo "  npx eas-cli@latest build --profile ${PROFILE} --platform android"
+            echo "Then republish this commit after that APK finishes."
+            exit 1
+          fi
+          echo "Found ${MATCH_COUNT} finished Android build(s) for this fingerprint."
+          eas update \
+            --channel "$CHANNEL" \
+            --environment "$ENVIRONMENT" \
+            --platform android \
+            --message "sha:${GIT_SHA}" \
+            --non-interactive
+          echo "Published to channel ${CHANNEL} with EAS environment ${ENVIRONMENT}."
+          echo "Installed APKs with fingerprint ${HASH} can download this update."
