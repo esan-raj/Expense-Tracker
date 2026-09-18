@@ -8,6 +8,14 @@
     "scheme": "spendwise",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ae5c50a4-286f-4770-8d9c-8f3d83d87d02",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.spendwise.app"
@@ -39,10 +47,17 @@
           "backgroundColor": "#0F766E"
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-updates"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ae5c50a4-286f-4770-8d9c-8f3d83d87d02"
+      }
     }
   }
 }
