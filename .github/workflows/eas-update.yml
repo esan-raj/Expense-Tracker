@@ -63,13 +63,24 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
-          echo "Git branch ${BRANCH} publishes EAS channel ${CHANNEL} with environment ${ENVIRONMENT}."
+          echo "Git branch ${BRANCH} publishes EAS channel ${CHANNEL} with environment ${ENVIRONMENT} via profile ${PROFILE}."
 
       - name: Checkout validated commit
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
+
+      - name: Confirm checked-out SHA
+        run: |
+          set -euo pipefail
+          CHECKED="$(git rev-parse HEAD)"
+          echo "Validated publish SHA: ${GITHUB_SHA}"
+          echo "Checked-out SHA: ${CHECKED}"
+          if [ "$CHECKED" != "$GITHUB_SHA" ]; then
+            echo "::error::Checked-out commit ${CHECKED} is not the validated SHA ${GITHUB_SHA}."
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -80,30 +91,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Confirm this commit is still the branch tip
-        id: tip
-        run: |
-          set -euo pipefail
-          BRANCH="${GITHUB_REF_NAME}"
-          git fetch origin "$BRANCH"
-          TIP="$(git rev-parse "origin/${BRANCH}")"
-          CHECKED="$(git rev-parse HEAD)"
-          echo "Validated publish SHA: ${GITHUB_SHA}"
-          echo "Checked-out SHA: ${CHECKED}"
-          echo "Branch tip: ${TIP}"
-          if [ "$CHECKED" != "$GITHUB_SHA" ]; then
-            echo "::error::Checked-out commit ${CHECKED} is not the validated SHA ${GITHUB_SHA}."
-            exit 1
-          fi
-          if [ "$TIP" != "$GITHUB_SHA" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping publish so an older queued commit cannot replace ${TIP}."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Require EXPO_TOKEN
-        if: ${{ steps.tip.outputs.skip != 'true' }}
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
@@ -113,14 +101,12 @@ jobs:
           fi
 
       - name: Setup EAS
-        if: ${{ steps.tip.outputs.skip != 'true' }}
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Publish compatible EAS Update
-        if: ${{ steps.tip.outputs.skip != 'true' }}
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           CHANNEL: ${{ steps.target.outputs.channel }}
@@ -129,40 +115,178 @@ jobs:
           GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          BRANCH="${GITHUB_REF_NAME}"
-          git fetch origin "$BRANCH"
-          TIP="$(git rev-parse "origin/${BRANCH}")"
-          CHECKED="$(git rev-parse HEAD)"
-          if [ "$CHECKED" != "$GITHUB_SHA" ] || [ "$TIP" != "$GITHUB_SHA" ]; then
-            echo "Skipping publish immediately before eas update. tip=${TIP} checked=${CHECKED} sha=${GITHUB_SHA}"
-            exit 0
+
+          redact() {
+            sed -E \
+              -e 's/[Aa]uthorization:[[:space:]]*Bearer[[:space:]]+[^[:space:]]+/Authorization: Bearer [redacted]/g' \
+              -e 's/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/[redacted-jwt]/g' \
+              -e 's/(EXPO_TOKEN|SUPABASE_SERVICE_ROLE_KEY|SERVICE_ROLE)[=:][^[:space:]]+/\1=[redacted]/g' \
+              -e 's/(token|secret|password)["=:[:space:]]+[^[:space:]"]{8,}/\1=[redacted]/Ig'
+          }
+
+          echo "EAS CLI version:"
+          eas --version
+          echo
+          echo "eas fingerprint:generate --help:"
+          eas fingerprint:generate --help
+          echo
+          echo "Selected Git branch: ${GITHUB_REF_NAME}"
+          echo "EAS Update channel: ${CHANNEL}"
+          echo "EAS environment for eas update: ${ENVIRONMENT}"
+          echo "EAS build profile for fingerprint: ${PROFILE}"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const profileName = process.env.PROFILE;
+          const expectedEnv = process.env.ENVIRONMENT;
+          if (!fs.existsSync('eas.json')) {
+            console.error(`::error::eas.json is missing on commit ${process.env.GIT_SHA}.`);
+            console.error(`Build profile "${profileName}" and EAS environment "${expectedEnv}" cannot be applied.`);
+            console.error('Fingerprint generation and eas update would not match a preview/production APK profile.');
+            process.exit(1);
+          }
+          const eas = JSON.parse(fs.readFileSync('eas.json', 'utf8'));
+          const seen = new Set();
+          function resolveProfile(name) {
+            if (seen.has(name)) throw new Error(`eas.json build profile "${name}" has a circular extends chain.`);
+            seen.add(name);
+            const profile = eas.build?.[name];
+            if (!profile) throw new Error(`eas.json has no build profile named "${name}".`);
+            if (profile.extends) return { ...resolveProfile(profile.extends), ...profile };
+            return profile;
+          }
+          let resolved;
+          try {
+            resolved = resolveProfile(profileName);
+          } catch (error) {
+            console.error(`::error::${error.message}`);
+            console.error(`Available profiles: ${Object.keys(eas.build || {}).join(', ') || '(none)'}`);
+            process.exit(1);
+          }
+          const profileEnv = resolved.environment || null;
+          const profileChannel = resolved.channel || null;
+          console.log(`Resolved profile ${profileName}: channel=${profileChannel || '(none)'} environment=${profileEnv || '(none)'}`);
+          if (profileEnv !== expectedEnv) {
+            console.error(`::error::Build profile "${profileName}" environment is "${profileEnv}", but eas update will use --environment ${expectedEnv}.`);
+            process.exit(1);
+          }
+          if (profileChannel && profileChannel !== process.env.CHANNEL) {
+            console.error(`::error::Build profile "${profileName}" channel is "${profileChannel}", but this workflow publishes --channel ${process.env.CHANNEL}.`);
+            process.exit(1);
+          }
+          NODE
+
+          HELP="$(eas fingerprint:generate --help 2>&1 || true)"
+          FP_ARGS=(--platform android --json --non-interactive)
+          if echo "$HELP" | grep -q -- '--build-profile'; then
+            FP_ARGS+=(--build-profile "$PROFILE")
+            echo "Using fingerprint flag --build-profile ${PROFILE} (binds the profile EAS environment without --environment JSON corruption)."
+          elif echo "$HELP" | grep -Eq -- '-e, --build-profile|-e[[:space:]]'; then
+            FP_ARGS+=(-e "$PROFILE")
+            echo "Using fingerprint flag -e ${PROFILE}."
+          else
+            echo "::error::Installed EAS CLI does not advertise a build-profile flag for fingerprint:generate."
+            echo "Refusing to generate a fingerprint without applying profile ${PROFILE}."
+            exit 1
           fi
-          echo "Publishing ${GIT_SHA} to channel ${CHANNEL} with environment ${ENVIRONMENT}."
-          echo "Generating Android fingerprint for profile ${PROFILE}..."
-          FINGERPRINT_JSON="$(eas fingerprint:generate --platform android --build-profile "$PROFILE" --json --non-interactive)"
+
+          FP_JSON="$(mktemp)"
+          BUILDS_JSON="$(mktemp)"
+          trap 'rm -f "$FP_JSON" "$BUILDS_JSON"' EXIT
+          echo "Generating Android fingerprint: eas fingerprint:generate ${FP_ARGS[*]}"
+          set +e
+          eas fingerprint:generate "${FP_ARGS[@]}" > "$FP_JSON"
+          FP_STATUS=$?
+          set -e
+          if [ "$FP_STATUS" -ne 0 ]; then
+            echo "::error::eas fingerprint:generate failed with exit code ${FP_STATUS}."
+            echo "Command stdout (secrets redacted):"
+            if [ -s "$FP_JSON" ]; then
+              redact < "$FP_JSON"
+            else
+              echo "(empty stdout)"
+            fi
+            echo "stderr was streamed above. This commit was not published."
+            exit "$FP_STATUS"
+          fi
+
           HASH="$(
             node -e '
               const fs = require("fs");
-              const raw = fs.readFileSync(0, "utf8").trim();
-              const parsed = JSON.parse(raw);
-              const hash = parsed.hash || parsed.fingerprintHash || parsed.fingerprint?.hash;
-              if (!hash) {
-                console.error("Could not read fingerprint hash from eas fingerprint:generate JSON.");
+              const raw = fs.readFileSync(process.argv[1], "utf8");
+              if (!raw.trim()) {
+                console.error("::error::fingerprint JSON file was empty.");
                 process.exit(1);
               }
-              process.stdout.write(String(hash));
-            ' <<<"$FINGERPRINT_JSON"
+              let parsed;
+              try {
+                parsed = JSON.parse(raw);
+              } catch (error) {
+                const start = raw.search(/[\[{]/);
+                if (start < 0) {
+                  console.error(`::error::fingerprint output was not JSON (${error.message}).`);
+                  process.exit(1);
+                }
+                try {
+                  parsed = JSON.parse(raw.slice(start));
+                  console.error("Warning: ignored leading non-JSON before the fingerprint object.");
+                } catch (inner) {
+                  console.error(`::error::Could not parse fingerprint JSON (${inner.message}). Top-level keys unavailable.`);
+                  process.exit(1);
+                }
+              }
+              const hash =
+                (parsed && typeof parsed.hash === "string" && parsed.hash) ||
+                (parsed && typeof parsed.fingerprintHash === "string" && parsed.fingerprintHash) ||
+                (parsed && parsed.fingerprint && typeof parsed.fingerprint.hash === "string" && parsed.fingerprint.hash) ||
+                null;
+              if (!hash) {
+                const keys = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                  ? Object.keys(parsed).join(", ")
+                  : `type=${Array.isArray(parsed) ? "array" : typeof parsed}`;
+                console.error(`::error::Fingerprint JSON parsed but had no hash. Top-level keys/type: ${keys}`);
+                process.exit(1);
+              }
+              process.stdout.write(hash);
+            ' "$FP_JSON"
           )"
           echo "Android fingerprint: ${HASH}"
-          BUILDS_JSON="$(eas build:list --platform android --fingerprint-hash "$HASH" --status finished --limit 20 --json --non-interactive)"
+
+          echo "Looking up finished Android builds for this fingerprint..."
+          set +e
+          eas build:list --platform android --fingerprint-hash "$HASH" --status finished --limit 20 --json --non-interactive > "$BUILDS_JSON"
+          BUILDS_STATUS=$?
+          set -e
+          if [ "$BUILDS_STATUS" -ne 0 ]; then
+            echo "::error::eas build:list failed with exit code ${BUILDS_STATUS}."
+            echo "Command stdout (secrets redacted):"
+            if [ -s "$BUILDS_JSON" ]; then
+              redact < "$BUILDS_JSON"
+            else
+              echo "(empty stdout)"
+            fi
+            exit "$BUILDS_STATUS"
+          fi
+
           MATCH_COUNT="$(
             node -e '
               const fs = require("fs");
-              const raw = fs.readFileSync(0, "utf8").trim() || "[]";
-              const parsed = JSON.parse(raw);
+              const raw = fs.readFileSync(process.argv[1], "utf8").trim() || "[]";
+              let parsed;
+              try {
+                parsed = JSON.parse(raw);
+              } catch (error) {
+                console.error(`::error::Could not parse eas build:list JSON (${error.message}).`);
+                process.exit(1);
+              }
               const builds = Array.isArray(parsed) ? parsed : parsed.builds || parsed.data || [];
+              if (!Array.isArray(builds)) {
+                const keys = parsed && typeof parsed === "object" ? Object.keys(parsed).join(", ") : typeof parsed;
+                console.error(`::error::eas build:list JSON did not contain a builds array. Top-level keys/type: ${keys}`);
+                process.exit(1);
+              }
               process.stdout.write(String(builds.length));
-            ' <<<"$BUILDS_JSON"
+            ' "$BUILDS_JSON"
           )"
           if [ "$MATCH_COUNT" -eq 0 ]; then
             echo "::error::No finished Android build matches fingerprint ${HASH}."
@@ -174,6 +298,21 @@ jobs:
             exit 1
           fi
           echo "Found ${MATCH_COUNT} finished Android build(s) for this fingerprint."
+
+          BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "$BRANCH"
+          TIP="$(git rev-parse "origin/${BRANCH}")"
+          CHECKED="$(git rev-parse HEAD)"
+          echo "Branch-tip check immediately before eas update."
+          echo "Validated SHA: ${GITHUB_SHA}"
+          echo "Checked-out SHA: ${CHECKED}"
+          echo "Branch tip: ${TIP}"
+          if [ "$CHECKED" != "$GITHUB_SHA" ] || [ "$TIP" != "$GITHUB_SHA" ]; then
+            echo "Skipping eas update so an older queued commit cannot replace ${TIP}."
+            exit 0
+          fi
+
+          echo "Publishing ${GIT_SHA} with eas update --channel ${CHANNEL} --environment ${ENVIRONMENT} --platform android"
           eas update \
             --channel "$CHANNEL" \
             --environment "$ENVIRONMENT" \

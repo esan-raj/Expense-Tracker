@@ -79,7 +79,7 @@ GitHub:
 - Open a pull request from `development` into `Production` → `validate` and `release-source` only. No OTA publish on the pull-request event.
 - Merge that PR → push to `Production` → `validate`, then publish to EAS channel `production` with environment `production` if the fingerprint has a finished Android build.
 
-Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The publish job then takes a per-channel lock (`cancel-in-progress: false`) and re-checks that SHA is still the branch tip immediately before `eas update`. Older queued commits are skipped instead of publishing over a newer release. In-flight production publishes are not cancelled. If no finished Android APK exists for the current fingerprint, the job fails and does **not** claim installed APKs received the change. The update message is `sha:<commit>`.
+Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The publish job then takes a per-channel lock (`cancel-in-progress: false`). It generates the Android fingerprint with the matching EAS build profile (which binds the same EAS environment later passed to `eas update`), looks up a finished Android build for that fingerprint, then re-checks that SHA is still the branch tip immediately before `eas update`. Fingerprint CLI stdout is captured to a file so stderr stays visible; a missing `eas.json` profile, a fingerprint parse error, or no matching APK fails the job without claiming installed APKs received the change. Older queued commits are skipped instead of publishing over a newer release. In-flight production publishes are not cancelled. The update message is `sha:<commit>`.
 
 Manual (after `npx tsc --noEmit` and `npx jest --no-coverage`):
 
