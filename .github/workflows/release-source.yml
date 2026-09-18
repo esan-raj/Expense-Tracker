@@ -1,0 +1,45 @@
+name: Release source
+
+on:
+  pull_request:
+    branches:
+      - Production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  release-source:
+    name: release-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require same-repository development branch
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          HEAD_ID: ${{ github.event.pull_request.head.repo.id }}
+          BASE_ID: ${{ github.event.pull_request.base.repo.id }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          echo "PR head repository: ${HEAD_REPO} (${HEAD_ID})"
+          echo "PR base repository: ${BASE_REPO} (${BASE_ID})"
+          echo "PR head branch: ${HEAD_REF}"
+
+          if [ "$HEAD_FORK" = "true" ] || [ "$HEAD_REPO" != "$BASE_REPO" ] || [ "$HEAD_ID" != "$BASE_ID" ]; then
+            echo "::error::Production pull requests must come from this repository's development branch, not a fork."
+            exit 1
+          fi
+
+          if [ "$HEAD_REF" != "development" ]; then
+            echo "::error::Production pull requests must originate from the development branch (exact name)."
+            echo "Open the PR from development into Production after preview validation."
+            exit 1
+          fi
+
+          echo "Release source accepted: ${BASE_REPO}@development"
