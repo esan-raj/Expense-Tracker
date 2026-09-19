@@ -22,6 +22,7 @@ import { StartupScreen } from '@/components/startup/StartupScreen';
 import { UpdateReadyBar } from '@/components/updates/UpdateReadyBar';
 import { UpdateReadyModal } from '@/components/updates/UpdateReadyModal';
 import { appUpdateController } from '@/services/appUpdate';
+import { applyStartupUpdateIfAvailable } from '@/services/appUpdate/applyStartupUpdate';
 import {
   createAppStartupController,
   createInitialStartupState,
@@ -40,7 +41,6 @@ export default function RootLayout() {
   const user = useAuthStore((state) => state.user);
   const seenUserIdRef = useRef<string | null | undefined>(undefined);
   const splashHiddenRef = useRef(false);
-  const autoRetryCountRef = useRef(0);
   const startupRef = useRef(startup);
   startupRef.current = startup;
 
@@ -56,6 +56,7 @@ export default function RootLayout() {
       getState: () => startupRef.current,
       setState: (partial) => setStartup((prev) => ({ ...prev, ...partial })),
       steps: {
+        applyUpdate: () => applyStartupUpdateIfAvailable(),
         openLocalDatabase: async () => {
           await getRxDatabase();
         },
@@ -91,7 +92,6 @@ export default function RootLayout() {
         },
         afterReady: () => {
           void recurringService.processDue().catch(() => undefined);
-          // Cloud auth refresh + Supabase sync must not gate first paint.
           void useAuthStore.getState().connectCloud();
           void useSyncStore.getState().startNetworkSync();
         },
@@ -111,20 +111,6 @@ export default function RootLayout() {
   useEffect(() => {
     if (startup.phase === 'ready' || startup.phase === 'recoverable-error') hideSplash();
   }, [startup.phase]);
-
-  useEffect(() => {
-    if (startup.phase === 'ready') {
-      autoRetryCountRef.current = 0;
-      return;
-    }
-    if (startup.phase !== 'recoverable-error') return;
-    if (autoRetryCountRef.current >= 1) return;
-    autoRetryCountRef.current += 1;
-    const timer = setTimeout(() => {
-      void controller.retry();
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [startup.phase, startup.generation, controller]);
 
   useEffect(() => {
     if (startup.phase !== 'ready') return;
@@ -158,14 +144,7 @@ export default function RootLayout() {
 
   if (startup.phase !== 'ready') {
     return (
-      <StartupScreen
-        phase={startup.phase}
-        message={startup.message}
-        onReady={hideSplash}
-        onRetry={
-          startup.phase === 'recoverable-error' ? () => void controller.retry() : undefined
-        }
-      />
+      <StartupScreen phase={startup.phase} message={startup.message} onReady={hideSplash} />
     );
   }
 

@@ -114,6 +114,8 @@ describe('app startup state machine', () => {
       setState: (partial) => {
         state = { ...state, ...partial };
       },
+      forceReadyMs: 30_000,
+      dbTimeoutMs: 30_000,
       steps: {
         openLocalDatabase: async () => {
           runs += 1;
@@ -133,19 +135,20 @@ describe('app startup state machine', () => {
     expect(state.phase).toBe('ready');
   });
 
-  it('retries only transient failures once, then surfaces Retry', async () => {
-    let attempts = 0;
+  it('force-ready unblocks a hung local database open', async () => {
+    const gate = deferred<void>();
     let state = createInitialStartupState();
     const controller = createAppStartupController({
       getState: () => state,
       setState: (partial) => {
         state = { ...state, ...partial };
       },
-      maxTransientRetries: 1,
+      forceReadyMs: 60,
+      dbTimeoutMs: 5_000,
+      softTimeoutMs: 5_000,
       steps: {
         openLocalDatabase: async () => {
-          attempts += 1;
-          throw new Error('network timeout');
+          await gate.promise;
         },
         restoreSession: async () => undefined,
         loadLocalStores: async () => undefined,
@@ -153,24 +156,22 @@ describe('app startup state machine', () => {
       },
     });
 
-    await controller.start();
-    expect(attempts).toBe(2);
-    expect(state.phase).toBe('recoverable-error');
-    expect(isTransientStartupFailure(new Error('network timeout'))).toBe(true);
+    const pending = controller.start();
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(state.phase).toBe('ready');
+    gate.resolve();
+    await pending;
   });
 
-  it('does not retry deterministic startup failures', async () => {
-    let attempts = 0;
+  it('soft-fails database throws and still reaches ready', async () => {
     let state = createInitialStartupState();
     const controller = createAppStartupController({
       getState: () => state,
       setState: (partial) => {
         state = { ...state, ...partial };
       },
-      maxTransientRetries: 1,
       steps: {
         openLocalDatabase: async () => {
-          attempts += 1;
           throw new Error('schema corrupt');
         },
         restoreSession: async () => undefined,
@@ -180,8 +181,33 @@ describe('app startup state machine', () => {
     });
 
     await controller.start();
-    expect(attempts).toBe(1);
-    expect(state.phase).toBe('recoverable-error');
+    expect(state.phase).toBe('ready');
+    expect(isTransientStartupFailure(new Error('network timeout'))).toBe(true);
+  });
+
+  it('skips remaining work when applyUpdate returns reloading', async () => {
+    let dbRuns = 0;
+    let state = createInitialStartupState();
+    const controller = createAppStartupController({
+      getState: () => state,
+      setState: (partial) => {
+        state = { ...state, ...partial };
+      },
+      forceReadyMs: 30_000,
+      steps: {
+        applyUpdate: async () => 'reloading',
+        openLocalDatabase: async () => {
+          dbRuns += 1;
+        },
+        restoreSession: async () => undefined,
+        loadLocalStores: async () => undefined,
+        prepareDashboard: async () => undefined,
+      },
+    });
+
+    await controller.start();
+    expect(dbRuns).toBe(0);
+    expect(state.phase).not.toBe('ready');
   });
 
   it('ignores stale pipeline results after a newer generation starts', async () => {

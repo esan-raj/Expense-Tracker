@@ -43,6 +43,8 @@ export function createInitialStartupState(): StartupState {
 }
 
 export type AppStartupSteps = {
+  /** Optional OTA apply before local work. Return 'reloading' to abort pipeline. */
+  applyUpdate?: () => Promise<'reloading' | 'skipped'>;
   openLocalDatabase: () => Promise<void>;
   restoreSession: () => Promise<void>;
   loadLocalStores: () => Promise<void>;
@@ -52,8 +54,11 @@ export type AppStartupSteps = {
 
 const TRANSIENT_HINT = /timeout|timed out|network|offline|temporarily|ECONNRESET|ENOTFOUND|unavailable/i;
 
-export const STARTUP_DB_TIMEOUT_MS = 20_000;
-export const STARTUP_SOFT_TIMEOUT_MS = 6_000;
+/** Hard cap so a blocked JS/native DB open cannot freeze the branded loader forever. */
+export const STARTUP_FORCE_READY_MS = 2_500;
+export const STARTUP_DB_TIMEOUT_MS = 8_000;
+export const STARTUP_SOFT_TIMEOUT_MS = 3_000;
+export const STARTUP_UPDATE_TIMEOUT_MS = 5_000;
 
 export function isTransientStartupFailure(error: unknown): boolean {
   if (!error) return false;
@@ -85,7 +90,7 @@ async function runSoft(step: () => Promise<void>, timeoutMs: number, label: stri
   try {
     await withStartupTimeout(step(), timeoutMs, label);
   } catch {
-    // Soft steps must not block first paint; Home/sync recover in-app.
+    // Soft steps must not block first paint.
   }
 }
 
@@ -93,14 +98,17 @@ export function createAppStartupController(deps: {
   setState: (partial: Partial<StartupState>) => void;
   getState: () => StartupState;
   steps: AppStartupSteps;
-  /** Bounded automatic recovery attempts for transient races only. */
   maxTransientRetries?: number;
   dbTimeoutMs?: number;
   softTimeoutMs?: number;
+  forceReadyMs?: number;
+  updateTimeoutMs?: number;
 }) {
-  const maxTransientRetries = deps.maxTransientRetries ?? 1;
+  const maxTransientRetries = deps.maxTransientRetries ?? 0;
   const dbTimeoutMs = deps.dbTimeoutMs ?? STARTUP_DB_TIMEOUT_MS;
   const softTimeoutMs = deps.softTimeoutMs ?? STARTUP_SOFT_TIMEOUT_MS;
+  const forceReadyMs = deps.forceReadyMs ?? STARTUP_FORCE_READY_MS;
+  const updateTimeoutMs = deps.updateTimeoutMs ?? STARTUP_UPDATE_TIMEOUT_MS;
   let inFlight: Promise<void> | null = null;
 
   const setPhase = (phase: StartupPhase, error: string | null = null) => {
@@ -111,11 +119,34 @@ export function createAppStartupController(deps: {
     });
   };
 
+  const markReady = (generation: number) => {
+    if (deps.getState().generation !== generation) return;
+    if (deps.getState().phase === 'ready') return;
+    setPhase('ready');
+    deps.steps.afterReady?.();
+  };
+
   const runPipeline = async (generation: number): Promise<void> => {
     const stillCurrent = () => deps.getState().generation === generation;
 
+    if (deps.steps.applyUpdate) {
+      setPhase('initializing');
+      try {
+        const result = await withStartupTimeout(
+          deps.steps.applyUpdate(),
+          updateTimeoutMs,
+          'startup update check'
+        );
+        if (result === 'reloading') return;
+      } catch {
+        // Offline or Expo Updates unavailable — continue with local launch.
+      }
+      if (!stillCurrent()) return;
+    }
+
     setPhase('opening-local-database');
-    await withStartupTimeout(deps.steps.openLocalDatabase(), dbTimeoutMs, 'local database');
+    // Soft: a hung SQLite/RxDB open must not trap the user on StartupScreen.
+    await runSoft(deps.steps.openLocalDatabase, dbTimeoutMs, 'local database');
     if (!stillCurrent()) return;
 
     setPhase('restoring-session');
@@ -125,11 +156,9 @@ export function createAppStartupController(deps: {
     setPhase('loading-dashboard');
     await runSoft(deps.steps.loadLocalStores, softTimeoutMs, 'local stores');
     if (!stillCurrent()) return;
-    // Dashboard seed is best-effort and must never gate first paint.
     void runSoft(deps.steps.prepareDashboard, softTimeoutMs, 'dashboard seed');
 
-    setPhase('ready');
-    deps.steps.afterReady?.();
+    markReady(generation);
   };
 
   const start = async (): Promise<StartupState> => {
@@ -147,24 +176,37 @@ export function createAppStartupController(deps: {
     });
 
     inFlight = (async () => {
+      const forceTimer = setTimeout(() => {
+        markReady(generation);
+      }, forceReadyMs);
+
       let attempt = 0;
-      while (attempt <= maxTransientRetries) {
-        try {
-          await runPipeline(generation);
-          return;
-        } catch (error) {
-          if (deps.getState().generation !== generation) return;
-          const transient = isTransientStartupFailure(error) && attempt < maxTransientRetries;
-          if (transient) {
-            attempt += 1;
-            continue;
+      try {
+        while (attempt <= maxTransientRetries) {
+          try {
+            await runPipeline(generation);
+            return;
+          } catch (error) {
+            if (deps.getState().generation !== generation) return;
+            if (deps.getState().phase === 'ready') return;
+            const transient = isTransientStartupFailure(error) && attempt < maxTransientRetries;
+            if (transient) {
+              attempt += 1;
+              continue;
+            }
+            // Prefer entering the app over a permanent branded loader.
+            markReady(generation);
+            if (deps.getState().phase !== 'ready') {
+              setPhase(
+                'recoverable-error',
+                toUserMessage(error, 'SpendWise could not start. Please try again.')
+              );
+            }
+            return;
           }
-          setPhase(
-            'recoverable-error',
-            toUserMessage(error, 'SpendWise could not start. Please try again.')
-          );
-          return;
         }
+      } finally {
+        clearTimeout(forceTimer);
       }
     })().finally(() => {
       inFlight = null;
