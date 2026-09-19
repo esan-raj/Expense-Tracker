@@ -69,7 +69,6 @@ export default function RootLayout() {
           const investments = useInvestmentStore.getState().load;
           const sync = useSyncStore.getState().hydrate;
           await Promise.all([settings(), categories(), accounts(), investments(), sync()]);
-          await recurringService.processDue();
         },
         prepareDashboard: async () => {
           const generation = startupRef.current.generation;
@@ -86,12 +85,12 @@ export default function RootLayout() {
             if (startupRef.current.generation !== generation) return;
             setDashboardSeed(snapshot);
           } catch {
-            // Dashboard seed is optional — Home can load its own snapshot.
             if (startupRef.current.generation !== generation) return;
             clearDashboardSeed();
           }
         },
         afterReady: () => {
+          void recurringService.processDue().catch(() => undefined);
           const currentUser = useAuthStore.getState().user;
           if (!currentUser) return;
           const loadCategories = useCategoryStore.getState().load;
@@ -128,11 +127,11 @@ export default function RootLayout() {
       return;
     }
     if (startup.phase !== 'recoverable-error') return;
-    if (autoRetryCountRef.current >= 2) return;
+    if (autoRetryCountRef.current >= 1) return;
     autoRetryCountRef.current += 1;
     const timer = setTimeout(() => {
       void controller.retry();
-    }, 1_600);
+    }, 900);
     return () => clearTimeout(timer);
   }, [startup.phase, startup.generation, controller]);
 

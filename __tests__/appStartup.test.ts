@@ -28,7 +28,7 @@ describe('app startup state machine', () => {
     expect(startupStatusLabel('loading-dashboard')).toMatch(/financial overview/i);
   });
 
-  it('runs one pipeline and waits for session plus local database before dashboard', async () => {
+  it('runs one pipeline and waits for session plus local database before ready', async () => {
     const order: string[] = [];
     let state = createInitialStartupState();
     const controller = createAppStartupController({
@@ -53,8 +53,56 @@ describe('app startup state machine', () => {
     });
 
     await controller.start();
-    expect(order).toEqual(['db', 'session', 'stores', 'dashboard']);
+    expect(order.slice(0, 3)).toEqual(['db', 'session', 'stores']);
     expect(state.phase).toBe('ready');
+  });
+
+  it('reaches ready even when dashboard seed never finishes', async () => {
+    const gate = deferred<void>();
+    let state = createInitialStartupState();
+    const controller = createAppStartupController({
+      getState: () => state,
+      setState: (partial) => {
+        state = { ...state, ...partial };
+      },
+      softTimeoutMs: 50,
+      steps: {
+        openLocalDatabase: async () => undefined,
+        restoreSession: async () => undefined,
+        loadLocalStores: async () => undefined,
+        prepareDashboard: async () => {
+          await gate.promise;
+        },
+      },
+    });
+
+    await controller.start();
+    expect(state.phase).toBe('ready');
+    gate.resolve();
+  });
+
+  it('soft-fails a hung session restore and still becomes ready', async () => {
+    const gate = deferred<void>();
+    let state = createInitialStartupState();
+    const controller = createAppStartupController({
+      getState: () => state,
+      setState: (partial) => {
+        state = { ...state, ...partial };
+      },
+      softTimeoutMs: 40,
+      steps: {
+        openLocalDatabase: async () => undefined,
+        restoreSession: async () => {
+          await gate.promise;
+        },
+        loadLocalStores: async () => undefined,
+        prepareDashboard: async () => undefined,
+      },
+    });
+
+    await controller.start();
+    expect(state.phase).toBe('ready');
+    gate.resolve();
   });
 
   it('deduplicates concurrent start calls', async () => {

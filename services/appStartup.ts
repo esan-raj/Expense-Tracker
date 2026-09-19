@@ -52,10 +52,41 @@ export type AppStartupSteps = {
 
 const TRANSIENT_HINT = /timeout|timed out|network|offline|temporarily|ECONNRESET|ENOTFOUND|unavailable/i;
 
+export const STARTUP_DB_TIMEOUT_MS = 20_000;
+export const STARTUP_SOFT_TIMEOUT_MS = 6_000;
+
 export function isTransientStartupFailure(error: unknown): boolean {
   if (!error) return false;
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
   return TRANSIENT_HINT.test(text);
+}
+
+export async function withStartupTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function runSoft(step: () => Promise<void>, timeoutMs: number, label: string): Promise<void> {
+  try {
+    await withStartupTimeout(step(), timeoutMs, label);
+  } catch {
+    // Soft steps must not block first paint; Home/sync recover in-app.
+  }
 }
 
 export function createAppStartupController(deps: {
@@ -64,8 +95,12 @@ export function createAppStartupController(deps: {
   steps: AppStartupSteps;
   /** Bounded automatic recovery attempts for transient races only. */
   maxTransientRetries?: number;
+  dbTimeoutMs?: number;
+  softTimeoutMs?: number;
 }) {
   const maxTransientRetries = deps.maxTransientRetries ?? 1;
+  const dbTimeoutMs = deps.dbTimeoutMs ?? STARTUP_DB_TIMEOUT_MS;
+  const softTimeoutMs = deps.softTimeoutMs ?? STARTUP_SOFT_TIMEOUT_MS;
   let inFlight: Promise<void> | null = null;
 
   const setPhase = (phase: StartupPhase, error: string | null = null) => {
@@ -80,18 +115,18 @@ export function createAppStartupController(deps: {
     const stillCurrent = () => deps.getState().generation === generation;
 
     setPhase('opening-local-database');
-    await deps.steps.openLocalDatabase();
+    await withStartupTimeout(deps.steps.openLocalDatabase(), dbTimeoutMs, 'local database');
     if (!stillCurrent()) return;
 
     setPhase('restoring-session');
-    await deps.steps.restoreSession();
+    await runSoft(deps.steps.restoreSession, softTimeoutMs, 'session restore');
     if (!stillCurrent()) return;
 
     setPhase('loading-dashboard');
-    await deps.steps.loadLocalStores();
+    await runSoft(deps.steps.loadLocalStores, softTimeoutMs, 'local stores');
     if (!stillCurrent()) return;
-    await deps.steps.prepareDashboard();
-    if (!stillCurrent()) return;
+    // Dashboard seed is best-effort and must never gate first paint.
+    void runSoft(deps.steps.prepareDashboard, softTimeoutMs, 'dashboard seed');
 
     setPhase('ready');
     deps.steps.afterReady?.();
