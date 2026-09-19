@@ -9,31 +9,45 @@ interface AuthState {
   user: User | null;
   session: Session | null;
   hydrated: boolean;
+  /** Local-only restore for startup — no network. */
   hydrate: () => Promise<void>;
+  /** After UI is ready: auth listeners, token refresh, local claim. */
+  connectCloud: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+let cloudConnected = false;
+
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
   hydrated: false,
   hydrate: async () => {
-    const session = await authService.getSession();
+    const localSync = await syncStateRepository.get();
+    const session = await authService.getPersistedSession();
     const user = session?.user ?? null;
-    console.info('[supabase][auth] session restored:', Boolean(session));
-    console.info('[supabase][auth] user authenticated:', Boolean(user));
+
     if (user) {
       setCurrentUserId(user.id);
-      // Claim is background work — awaiting it blocked first paint on large local DBs.
-      void syncService.claimUnassigned(user.id).catch(() => undefined);
+    } else if (localSync.userId) {
+      // Keep local finance scope even if the JWT blob is missing/expired.
+      setCurrentUserId(localSync.userId);
+      setScopedUserId(localSync.userId);
     } else {
       setCurrentUserId(null);
-      const state = await syncStateRepository.get();
-      setScopedUserId(state.userId);
+      setScopedUserId(null);
     }
+
+    console.info('[supabase][auth] local session restored:', Boolean(session));
+    console.info('[supabase][auth] local user scoped:', Boolean(user ?? localSync.userId));
     set({ session, user, hydrated: true });
+  },
+  connectCloud: async () => {
+    if (cloudConnected) return;
+    cloudConnected = true;
+
     authService.onAuthStateChange((next) => {
       const nextUser = next?.user ?? null;
       if (nextUser) {
@@ -43,6 +57,32 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
       set({ session: next, user: nextUser });
     });
+
+    // May refresh tokens / hit the network — only after first paint.
+    let session: Session | null = null;
+    try {
+      session = await Promise.race([
+        authService.getSession(),
+        new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), 8_000);
+        }),
+      ]);
+    } catch {
+      session = null;
+    }
+
+    const user = session?.user ?? get().user;
+    if (session?.user) {
+      setCurrentUserId(session.user.id);
+      set({ session, user: session.user });
+    }
+    if (user?.id) {
+      try {
+        await syncService.claimUnassigned(user.id);
+      } catch {
+        // Local claim can retry on the next sync.
+      }
+    }
   },
   signIn: async (email, password) => {
     const session = await authService.signIn(email, password);

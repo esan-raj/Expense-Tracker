@@ -91,18 +91,9 @@ export default function RootLayout() {
         },
         afterReady: () => {
           void recurringService.processDue().catch(() => undefined);
-          const currentUser = useAuthStore.getState().user;
-          if (!currentUser) return;
-          const loadCategories = useCategoryStore.getState().load;
-          const loadAccounts = useAccountStore.getState().load;
-          const loadInvestments = useInvestmentStore.getState().load;
-          void syncService.startRealtime(currentUser.id, () => {
-            bumpFinanceRevision();
-            void loadCategories();
-            void loadAccounts();
-            void loadInvestments();
-          });
-          void useSyncStore.getState().syncNow();
+          // Cloud auth refresh + Supabase sync must not gate first paint.
+          void useAuthStore.getState().connectCloud();
+          void useSyncStore.getState().startNetworkSync();
         },
       },
     });
