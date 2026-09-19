@@ -2,6 +2,9 @@ import type { ReloadDecision, UpdateCheckSource, UpdateEnvironment } from './typ
 
 const NETWORK_HINT = /network|offline|internet|failed to fetch|timeout|timed out|unreachable|econnreset|enotfound/i;
 
+/** Minimum gap between automatic (launch/foreground) update checks. */
+export const UPDATE_AUTO_CHECK_COOLDOWN_MS = 5 * 60 * 1000;
+
 export function resolveUpdateEnvironment(input: {
   os: string;
   isDev: boolean;
@@ -90,6 +93,25 @@ export function createUpdateCheckGate() {
     },
     reset() {
       inFlight = null;
+    },
+  };
+}
+
+export function createAutoCheckCooldown(cooldownMs = UPDATE_AUTO_CHECK_COOLDOWN_MS) {
+  let lastAutoCheckAt = Number.NEGATIVE_INFINITY;
+
+  return {
+    allow(source: UpdateCheckSource, now = Date.now()): boolean {
+      if (source === 'manual') return true;
+      if (now - lastAutoCheckAt < cooldownMs) return false;
+      lastAutoCheckAt = now;
+      return true;
+    },
+    reset() {
+      lastAutoCheckAt = Number.NEGATIVE_INFINITY;
+    },
+    lastAt() {
+      return Number.isFinite(lastAutoCheckAt) ? lastAutoCheckAt : 0;
     },
   };
 }

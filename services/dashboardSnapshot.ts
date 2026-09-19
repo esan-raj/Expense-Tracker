@@ -79,27 +79,23 @@ type FetchSnapshot = (args: {
 
 export function createDashboardLoader(deps: {
   fetchSnapshot: FetchSnapshot;
+  /** @deprecated Kept for tests; slow loads no longer become Retry errors. */
   timeoutMs?: number;
+  /** Optional preloaded snapshot from root startup (same user/period). */
+  seed?: HomeDashboardSnapshot | null;
 }) {
-  const timeoutMs = deps.timeoutMs ?? DASHBOARD_LOAD_TIMEOUT_MS;
+  void deps.timeoutMs;
   let requestId = 0;
-  let userKey = 'local';
-  let snapshot: HomeDashboardSnapshot | null = null;
-  let status: DashboardPhase = 'initial';
+  let userKey = deps.seed?.userKey ?? 'local';
+  let snapshot: HomeDashboardSnapshot | null = deps.seed ?? null;
+  let status: DashboardPhase = deps.seed ? 'ready' : 'initial';
   let error: string | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null;
   let published: DashboardLoadState = { snapshot, status, error };
   const listeners = new Set<() => void>();
 
   const emit = () => {
     published = { snapshot, status, error };
     listeners.forEach((listener) => listener());
-  };
-
-  const clearTimer = () => {
-    if (!timer) return;
-    clearTimeout(timer);
-    timer = null;
   };
 
   const subscribe = (listener: () => void) => {
@@ -118,7 +114,6 @@ export function createDashboardLoader(deps: {
     snapshot = null;
     error = null;
     status = 'initial';
-    clearTimer();
     emit();
   };
 
@@ -135,15 +130,6 @@ export function createDashboardLoader(deps: {
     }
     error = null;
     emit();
-
-    clearTimer();
-    timer = setTimeout(() => {
-      if (id !== requestId) return;
-      if (snapshot?.userKey === key && snapshot.periodKey === periodKey) return;
-      error = 'Your finances are taking longer than expected. Retry when you are ready.';
-      status = 'error';
-      emit();
-    }, timeoutMs);
 
     try {
       const next = await deps.fetchSnapshot({ userKey: key, month, year });
@@ -174,7 +160,6 @@ export function createDashboardLoader(deps: {
       error = toUserMessage(err, 'We could not load your dashboard.');
       status = keepVisible ? 'ready' : 'error';
     } finally {
-      if (id === requestId) clearTimer();
       if (
         shouldAcceptDashboardResult({
           requestId: id,

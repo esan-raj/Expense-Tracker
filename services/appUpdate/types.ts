@@ -4,12 +4,13 @@ export type UpdateCheckStatus =
   | 'idle'
   | 'unsupported'
   | 'checking'
+  | 'available'
   | 'downloading'
   | 'ready'
   | 'unavailable'
   | 'error';
 
-export type UpdateCheckSource = 'launch' | 'manual';
+export type UpdateCheckSource = 'launch' | 'manual' | 'foreground';
 
 export interface AppUpdateInfo {
   appVersion: string;
@@ -46,7 +47,10 @@ export interface AppUpdateState {
   status: UpdateCheckStatus;
   message: string;
   bannerVisible: boolean;
+  /** One-shot restart prompt for the current foreground session. */
+  promptVisible: boolean;
   lastError: string | null;
+  lastCheckedAt: string | null;
   info: AppUpdateInfo;
   environment: UpdateEnvironment;
 }

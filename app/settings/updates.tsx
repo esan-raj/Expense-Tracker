@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { previewUpdateVerificationLabel } from '@/utils/previewUpdateMarker';
 
 function formatTimestamp(value: string | null): string {
   if (!value) return 'Not available';
@@ -15,13 +16,15 @@ function formatTimestamp(value: string | null): string {
 function statusLabel(status: string): string {
   switch (status) {
     case 'checking':
-      return 'Checking';
+      return 'Checking for updates…';
+    case 'available':
+      return 'Update available';
     case 'downloading':
       return 'Downloading';
     case 'ready':
       return 'Update ready';
     case 'unavailable':
-      return 'No update available';
+      return 'You’re up to date';
     case 'error':
       return 'Check failed';
     case 'unsupported':
@@ -35,6 +38,7 @@ export default function AppUpdatesScreen() {
   const { colors } = useTheme();
   const update = useAppUpdate();
   const checking = update.status === 'checking' || update.status === 'downloading';
+  const previewMarker = previewUpdateVerificationLabel(update.info.channel);
 
   const restart = async () => {
     try {
@@ -65,6 +69,9 @@ export default function AppUpdatesScreen() {
             disabled={checking || update.status === 'unsupported'}
             onPress={() => void update.check('manual')}
           />
+          {update.status === 'available' ? (
+            <Button title="Download update" onPress={() => void update.download()} />
+          ) : null}
           {update.status === 'ready' ? (
             <Button title="Restart now" variant="secondary" onPress={() => void restart()} />
           ) : null}
@@ -78,6 +85,7 @@ export default function AppUpdatesScreen() {
         <InfoRow label="Update channel" value={update.info.channel ?? 'Not in a release APK'} colors={colors} />
         <InfoRow label="Runtime" value={update.info.runtimeVersion ?? 'Not in a release APK'} colors={colors} />
         <InfoRow label="Update id" value={update.info.updateId ?? 'Embedded binary'} colors={colors} />
+        <InfoRow label="Last successful check" value={formatTimestamp(update.lastCheckedAt)} colors={colors} />
         <InfoRow label="Published" value={formatTimestamp(update.info.createdAt)} colors={colors} />
         <InfoRow
           label="Launch source"
@@ -90,9 +98,12 @@ export default function AppUpdatesScreen() {
           }
           colors={colors}
         />
+        {previewMarker ? (
+          <InfoRow label="Preview marker" value={previewMarker} colors={colors} />
+        ) : null}
         <Text style={[styles.footnote, { color: colors.textTertiary }]}>
-          These details identify the installed binary and the current JavaScript update. They do not include tokens, keys, or
-          account secrets.
+          Preview APKs only receive preview-channel updates. Production APKs only receive production-channel updates.
+          These details never include tokens, keys, or account secrets.
         </Text>
       </Card>
     </Screen>

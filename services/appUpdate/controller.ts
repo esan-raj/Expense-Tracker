@@ -1,6 +1,7 @@
 import { APP_VERSION } from '@/utils/constants';
 import {
   checkFailureMessage,
+  createAutoCheckCooldown,
   createUpdateCheckGate,
   decideReload,
   shouldAutoCheck,
@@ -40,7 +41,9 @@ export function createInitialAppUpdateState(adapter?: UpdatesAdapter): AppUpdate
     status: shouldAutoCheck(environment) ? 'idle' : 'unsupported',
     message: shouldAutoCheck(environment) ? 'No update check has run yet.' : unsupportedMessage(environment),
     bannerVisible: false,
+    promptVisible: false,
     lastError: null,
+    lastCheckedAt: null,
     info: adapter?.getInfo() ?? EMPTY_INFO,
     environment,
   };
@@ -48,6 +51,9 @@ export function createInitialAppUpdateState(adapter?: UpdatesAdapter): AppUpdate
 
 export function createAppUpdateController(deps: AppUpdateControllerDeps) {
   const gate = createUpdateCheckGate();
+  const cooldown = createAutoCheckCooldown();
+  let reloadInFlight = false;
+  let promptSuppressedThisSession = false;
 
   function syncInfo(partial: Partial<AppUpdateState> = {}) {
     deps.setState({
@@ -55,6 +61,52 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
       info: deps.adapter.getInfo(),
       ...partial,
     });
+  }
+
+  async function performDownload(): Promise<AppUpdateState> {
+    const previous = deps.getState();
+    syncInfo({
+      status: 'downloading',
+      message: 'Downloading update…',
+      lastError: null,
+    });
+    try {
+      const fetched = await deps.adapter.fetchUpdate();
+      if (!fetched.isNew && !fetched.isRollBackToEmbedded) {
+        syncInfo({
+          status: previous.status === 'ready' ? 'ready' : 'unavailable',
+          message:
+            previous.status === 'ready'
+              ? 'An update is already downloaded. Restart when you are ready.'
+              : 'No compatible update could be downloaded for this runtime.',
+          bannerVisible: previous.status === 'ready' ? previous.bannerVisible : false,
+          promptVisible: previous.status === 'ready' ? previous.promptVisible : false,
+          lastError:
+            previous.status === 'ready' ? null : 'No compatible update could be downloaded for this runtime.',
+        });
+        return deps.getState();
+      }
+      const showPrompt = !promptSuppressedThisSession;
+      syncInfo({
+        status: 'ready',
+        message: 'Update ready. Restart to apply it. Unsynced changes stay queued on this device.',
+        bannerVisible: true,
+        promptVisible: showPrompt,
+        lastError: null,
+      });
+      return deps.getState();
+    } catch (error) {
+      const message = checkFailureMessage(error, 'manual');
+      const keepReady = previous.status === 'ready';
+      syncInfo({
+        status: keepReady ? 'ready' : 'error',
+        message: keepReady ? previous.message : message,
+        lastError: message,
+        bannerVisible: keepReady ? previous.bannerVisible : false,
+        promptVisible: keepReady ? previous.promptVisible : false,
+      });
+      return deps.getState();
+    }
   }
 
   async function performCheck(source: UpdateCheckSource): Promise<AppUpdateState> {
@@ -65,7 +117,12 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
         message: unsupportedMessage(environment),
         lastError: null,
         bannerVisible: false,
+        promptVisible: false,
       });
+      return deps.getState();
+    }
+
+    if (!cooldown.allow(source)) {
       return deps.getState();
     }
 
@@ -78,7 +135,9 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
 
     try {
       const result = await deps.adapter.checkForUpdate();
+      const checkedAt = new Date().toISOString();
       const alreadyReady = previous.status === 'ready';
+
       if (!result.isAvailable && !result.isRollBackToEmbedded) {
         syncInfo({
           status: alreadyReady ? 'ready' : 'unavailable',
@@ -86,35 +145,28 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
             ? 'An update is already downloaded. Restart when you are ready.'
             : 'You are on the latest compatible update.',
           bannerVisible: alreadyReady ? previous.bannerVisible : false,
+          promptVisible: alreadyReady ? previous.promptVisible : false,
           lastError: null,
+          lastCheckedAt: checkedAt,
         });
         return deps.getState();
       }
 
-      syncInfo({
-        status: 'downloading',
-        message: 'Downloading update…',
-        lastError: null,
-      });
-      const fetched = await deps.adapter.fetchUpdate();
-      if (!fetched.isNew && !fetched.isRollBackToEmbedded) {
+      // Launch/foreground: download in the background. Manual: wait for explicit download.
+      if (source === 'manual') {
         syncInfo({
-          status: alreadyReady ? 'ready' : 'unavailable',
-          message: alreadyReady
-            ? 'An update is already downloaded. Restart when you are ready.'
-            : 'No compatible update could be downloaded for this runtime.',
-          bannerVisible: alreadyReady ? previous.bannerVisible : false,
-          lastError: alreadyReady ? null : 'No compatible update could be downloaded for this runtime.',
+          status: 'available',
+          message: 'Update available. Download when you are ready.',
+          lastError: null,
+          lastCheckedAt: checkedAt,
+          bannerVisible: false,
+          promptVisible: false,
         });
         return deps.getState();
       }
-      syncInfo({
-        status: 'ready',
-        message: 'Update ready. Restart to apply it. Unsynced changes stay queued on this device.',
-        bannerVisible: true,
-        lastError: null,
-      });
-      return deps.getState();
+
+      syncInfo({ lastCheckedAt: checkedAt });
+      return performDownload();
     } catch (error) {
       const message = checkFailureMessage(error, source);
       const keepReady = previous.status === 'ready';
@@ -123,6 +175,8 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
         message: keepReady ? previous.message : message,
         lastError: message,
         bannerVisible: keepReady ? previous.bannerVisible : false,
+        promptVisible: keepReady ? previous.promptVisible : false,
+        lastCheckedAt: source === 'manual' ? new Date().toISOString() : previous.lastCheckedAt,
       });
       return deps.getState();
     }
@@ -135,10 +189,26 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
     async check(source: UpdateCheckSource = 'manual'): Promise<AppUpdateState> {
       return gate.run(() => performCheck(source));
     },
+    async download(): Promise<AppUpdateState> {
+      return gate.run(() => performDownload());
+    },
     dismissBanner() {
-      deps.setState({ bannerVisible: false });
+      promptSuppressedThisSession = true;
+      deps.setState({ bannerVisible: false, promptVisible: false });
+    },
+    dismissPrompt() {
+      promptSuppressedThisSession = true;
+      deps.setState({ promptVisible: false });
     },
     async apply(): Promise<ReloadDecision> {
+      if (reloadInFlight) {
+        return {
+          ok: false,
+          reason: 'critical-work',
+          message: 'A restart is already in progress.',
+        };
+      }
+
       if (deps.isCriticalWork()) {
         const decision = decideReload({ criticalWork: true, flushSucceeded: true });
         if (!decision.ok) deps.setState({ lastError: decision.message });
@@ -154,11 +224,20 @@ export function createAppUpdateController(deps: AppUpdateControllerDeps) {
       }
 
       const decision = decideReload({ criticalWork: false, flushSucceeded: true });
-      await deps.adapter.reload();
-      return decision;
+      reloadInFlight = true;
+      try {
+        await deps.adapter.reload();
+        return decision;
+      } catch (error) {
+        reloadInFlight = false;
+        throw error;
+      }
     },
     reset() {
       gate.reset();
+      cooldown.reset();
+      reloadInFlight = false;
+      promptSuppressedThisSession = false;
       deps.setState(createInitialAppUpdateState(deps.adapter));
     },
   };

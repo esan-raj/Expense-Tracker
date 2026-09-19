@@ -92,7 +92,7 @@ export default function HomeScreen() {
   if (!data) {
     return (
       <Screen padded={false}>
-        <LoadingState message="Loading your finances…" />
+        <LoadingState message="Loading your financial overview…" />
       </Screen>
     );
   }

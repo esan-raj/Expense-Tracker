@@ -1,11 +1,13 @@
 /// <reference types="jest" />
 import { createAppUpdateController, createInitialAppUpdateState } from '@/services/appUpdate/controller';
 import {
+  createAutoCheckCooldown,
   createUpdateCheckGate,
   decideReload,
   isNetworkFailure,
   resolveUpdateEnvironment,
   shouldAutoCheck,
+  UPDATE_AUTO_CHECK_COOLDOWN_MS,
 } from '@/services/appUpdate/logic';
 import type { AppUpdateInfo, AppUpdateState, UpdatesAdapter } from '@/services/appUpdate/types';
 
@@ -31,7 +33,7 @@ function createAdapter(overrides: Partial<UpdatesAdapter> = {}): UpdatesAdapter 
     environment: 'standalone',
     getInfo: () => INFO,
     checkForUpdate: async () => ({ isAvailable: false, isRollBackToEmbedded: false }),
-        fetchUpdate: async () => ({ isNew: true, isRollBackToEmbedded: false }),
+    fetchUpdate: async () => ({ isNew: true, isRollBackToEmbedded: false }),
     reload: async () => undefined,
     ...overrides,
   };
@@ -138,10 +140,31 @@ describe('app update network and concurrency', () => {
     expect(fetches).toBe(1);
     expect(harness.getState().status).toBe('ready');
   });
+
+  it('applies a cooldown so foreground checks do not spam the update service', async () => {
+    let checks = 0;
+    const harness = createHarness({
+      adapter: {
+        checkForUpdate: async () => {
+          checks += 1;
+          return { isAvailable: false, isRollBackToEmbedded: false };
+        },
+      },
+    });
+
+    await harness.controller.check('launch');
+    await harness.controller.check('foreground');
+    expect(checks).toBe(1);
+
+    const cooldown = createAutoCheckCooldown(UPDATE_AUTO_CHECK_COOLDOWN_MS);
+    expect(cooldown.allow('launch', 1_000)).toBe(true);
+    expect(cooldown.allow('foreground', 1_000 + UPDATE_AUTO_CHECK_COOLDOWN_MS - 1)).toBe(false);
+    expect(cooldown.allow('manual', 1_000 + UPDATE_AUTO_CHECK_COOLDOWN_MS - 1)).toBe(true);
+  });
 });
 
 describe('app update ready and reload safety', () => {
-  it('marks an update as ready after download without reloading', async () => {
+  it('downloads automatically on launch and shows a ready prompt', async () => {
     const reload = jest.fn(async () => undefined);
     const harness = createHarness({
       adapter: {
@@ -153,7 +176,54 @@ describe('app update ready and reload safety', () => {
     const result = await harness.controller.check('launch');
     expect(result.status).toBe('ready');
     expect(result.bannerVisible).toBe(true);
+    expect(result.promptVisible).toBe(true);
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('leaves manual checks in available until the user downloads', async () => {
+    let fetches = 0;
+    const harness = createHarness({
+      adapter: {
+        checkForUpdate: async () => ({ isAvailable: true, isRollBackToEmbedded: false }),
+        fetchUpdate: async () => {
+          fetches += 1;
+          return { isNew: true, isRollBackToEmbedded: false };
+        },
+      },
+    });
+
+    await harness.controller.check('manual');
+    expect(harness.getState().status).toBe('available');
+    expect(fetches).toBe(0);
+    await harness.controller.download();
+    expect(fetches).toBe(1);
+    expect(harness.getState().status).toBe('ready');
+  });
+
+  it('marks unavailable when no compatible update exists', async () => {
+    const harness = createHarness({
+      adapter: {
+        checkForUpdate: async () => ({ isAvailable: false, isRollBackToEmbedded: false }),
+      },
+    });
+    await harness.controller.check('manual');
+    expect(harness.getState().status).toBe('unavailable');
+    expect(harness.getState().message).toMatch(/latest compatible update/i);
+    expect(harness.getState().lastCheckedAt).toBeTruthy();
+  });
+
+  it('suppresses the restart prompt after Later without clearing ready status', async () => {
+    const harness = createHarness({
+      adapter: {
+        checkForUpdate: async () => ({ isAvailable: true, isRollBackToEmbedded: false }),
+      },
+    });
+    await harness.controller.check('launch');
+    expect(harness.getState().promptVisible).toBe(true);
+    harness.controller.dismissPrompt();
+    expect(harness.getState().promptVisible).toBe(false);
+    expect(harness.getState().bannerVisible).toBe(true);
+    expect(harness.getState().status).toBe('ready');
   });
 
   it('does not reload while critical work is in progress', async () => {
@@ -168,7 +238,7 @@ describe('app update ready and reload safety', () => {
       isCriticalWork: () => true,
     });
 
-    await harness.controller.check('manual');
+    await harness.controller.check('launch');
     const decision = await harness.controller.apply();
     expect(decision).toEqual({
       ok: false,
@@ -191,7 +261,7 @@ describe('app update ready and reload safety', () => {
       flush,
     });
 
-    await harness.controller.check('manual');
+    await harness.controller.check('launch');
     await expect(harness.controller.apply()).resolves.toEqual({ ok: true });
     expect(flush).toHaveBeenCalledTimes(1);
     expect(reload).toHaveBeenCalledTimes(1);
@@ -209,7 +279,7 @@ describe('app update ready and reload safety', () => {
       },
     });
 
-    await harness.controller.check('manual');
+    await harness.controller.check('launch');
     const decision = await harness.controller.apply();
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.reason).toBe('flush-failed');

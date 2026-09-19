@@ -188,7 +188,7 @@ describe('dashboard loader coordination', () => {
     expect(loader.getSnapshot().error).toMatch(/could not load your dashboard/i);
   });
 
-  it('stops the initial spinner after a timeout instead of waiting forever', async () => {
+  it('keeps the initial loader while a slow fetch is still in flight', async () => {
     jest.useFakeTimers();
     const hanging = deferred<HomeDashboardSnapshot>();
     const loader = createDashboardLoader({
@@ -199,12 +199,22 @@ describe('dashboard loader coordination', () => {
     const pending = loader.load('initial', 9, 2026);
     expect(loader.getSnapshot().status).toBe('initial');
     jest.advanceTimersByTime(40);
-    expect(loader.getSnapshot().status).toBe('error');
+    expect(loader.getSnapshot().status).toBe('initial');
     expect(loader.getSnapshot().snapshot).toBeNull();
     hanging.resolve(snapshotFor('user-a', 9, 2026, 3));
     await pending;
     expect(loader.getSnapshot().status).toBe('ready');
     expect(loader.getSnapshot().snapshot?.dashboard.income).toBe(3);
     jest.useRealTimers();
+  });
+
+  it('seeds an already-ready snapshot without flashing empty totals', () => {
+    const seeded = snapshotFor('user-a', 9, 2026, 42);
+    const loader = createDashboardLoader({
+      seed: seeded,
+      fetchSnapshot: async () => snapshotFor('user-a', 9, 2026, 99),
+    });
+    expect(loader.getSnapshot().status).toBe('ready');
+    expect(loader.getSnapshot().snapshot?.dashboard.income).toBe(42);
   });
 });

@@ -1,0 +1,152 @@
+import { toUserMessage } from '@/utils/errors';
+
+export type StartupPhase =
+  | 'initializing'
+  | 'restoring-session'
+  | 'opening-local-database'
+  | 'loading-dashboard'
+  | 'ready'
+  | 'recoverable-error';
+
+export type StartupState = {
+  phase: StartupPhase;
+  message: string;
+  error: string | null;
+  generation: number;
+};
+
+export function startupStatusLabel(phase: StartupPhase): string {
+  switch (phase) {
+    case 'opening-local-database':
+      return 'Opening your secure local data…';
+    case 'restoring-session':
+      return 'Restoring your session…';
+    case 'loading-dashboard':
+      return 'Loading your financial overview…';
+    case 'recoverable-error':
+      return 'SpendWise could not finish starting.';
+    case 'ready':
+      return 'Ready';
+    case 'initializing':
+    default:
+      return 'Preparing SpendWise…';
+  }
+}
+
+export function createInitialStartupState(): StartupState {
+  return {
+    phase: 'initializing',
+    message: startupStatusLabel('initializing'),
+    error: null,
+    generation: 0,
+  };
+}
+
+export type AppStartupSteps = {
+  openLocalDatabase: () => Promise<void>;
+  restoreSession: () => Promise<void>;
+  loadLocalStores: () => Promise<void>;
+  prepareDashboard: () => Promise<void>;
+  afterReady?: () => void;
+};
+
+const TRANSIENT_HINT = /timeout|timed out|network|offline|temporarily|ECONNRESET|ENOTFOUND|unavailable/i;
+
+export function isTransientStartupFailure(error: unknown): boolean {
+  if (!error) return false;
+  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return TRANSIENT_HINT.test(text);
+}
+
+export function createAppStartupController(deps: {
+  setState: (partial: Partial<StartupState>) => void;
+  getState: () => StartupState;
+  steps: AppStartupSteps;
+  /** Bounded automatic recovery attempts for transient races only. */
+  maxTransientRetries?: number;
+}) {
+  const maxTransientRetries = deps.maxTransientRetries ?? 1;
+  let inFlight: Promise<void> | null = null;
+
+  const setPhase = (phase: StartupPhase, error: string | null = null) => {
+    deps.setState({
+      phase,
+      message: error ?? startupStatusLabel(phase),
+      error,
+    });
+  };
+
+  const runPipeline = async (generation: number): Promise<void> => {
+    const stillCurrent = () => deps.getState().generation === generation;
+
+    setPhase('opening-local-database');
+    await deps.steps.openLocalDatabase();
+    if (!stillCurrent()) return;
+
+    setPhase('restoring-session');
+    await deps.steps.restoreSession();
+    if (!stillCurrent()) return;
+
+    setPhase('loading-dashboard');
+    await deps.steps.loadLocalStores();
+    if (!stillCurrent()) return;
+    await deps.steps.prepareDashboard();
+    if (!stillCurrent()) return;
+
+    setPhase('ready');
+    deps.steps.afterReady?.();
+  };
+
+  const start = async (): Promise<StartupState> => {
+    if (inFlight) {
+      await inFlight;
+      return deps.getState();
+    }
+
+    const generation = deps.getState().generation + 1;
+    deps.setState({
+      generation,
+      phase: 'initializing',
+      message: startupStatusLabel('initializing'),
+      error: null,
+    });
+
+    inFlight = (async () => {
+      let attempt = 0;
+      while (attempt <= maxTransientRetries) {
+        try {
+          await runPipeline(generation);
+          return;
+        } catch (error) {
+          if (deps.getState().generation !== generation) return;
+          const transient = isTransientStartupFailure(error) && attempt < maxTransientRetries;
+          if (transient) {
+            attempt += 1;
+            continue;
+          }
+          setPhase(
+            'recoverable-error',
+            toUserMessage(error, 'SpendWise could not start. Please try again.')
+          );
+          return;
+        }
+      }
+    })().finally(() => {
+      inFlight = null;
+    });
+
+    await inFlight;
+    return deps.getState();
+  };
+
+  return {
+    isRunning(): boolean {
+      return inFlight !== null;
+    },
+    start,
+    retry(): Promise<StartupState> {
+      if (inFlight) return inFlight.then(() => deps.getState());
+      return start();
+    },
+  };
+}
