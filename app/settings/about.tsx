@@ -4,12 +4,8 @@ import { Screen } from '@/components/ui/Screen';
 import { Card } from '@/components/ui/Card';
 import { BrandLockup } from '@/components/brand/BrandLockup';
 import { useTheme } from '@/hooks/useTheme';
-<<<<<<< HEAD
 import { APP_VERSION } from '@/utils/constants';
-=======
-import { APP_NAME, APP_VERSION } from '@/utils/constants';
 import { previewUpdateVerificationLabel } from '@/utils/previewUpdateMarker';
->>>>>>> fdf8923d73e86c9e731382cb3a0cf14dca08e516
 
 export default function AboutScreen() {
   const { colors } = useTheme();
