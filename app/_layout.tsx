@@ -18,7 +18,6 @@ import { useTheme } from '@/hooks/useTheme';
 import { bumpFinanceRevision } from '@/services/financeRevision';
 import { DesktopSidebar } from '@/components/layout/DesktopSidebar';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
-import { ErrorState } from '@/components/ui/ErrorState';
 import { StartupScreen } from '@/components/startup/StartupScreen';
 import { UpdateReadyBar } from '@/components/updates/UpdateReadyBar';
 import { UpdateReadyModal } from '@/components/updates/UpdateReadyModal';
@@ -41,6 +40,7 @@ export default function RootLayout() {
   const user = useAuthStore((state) => state.user);
   const seenUserIdRef = useRef<string | null | undefined>(undefined);
   const splashHiddenRef = useRef(false);
+  const autoRetryCountRef = useRef(0);
   const startupRef = useRef(startup);
   startupRef.current = startup;
 
@@ -73,17 +73,23 @@ export default function RootLayout() {
         },
         prepareDashboard: async () => {
           const generation = startupRef.current.generation;
-          const authUser = useAuthStore.getState().user;
-          const userKey = dashboardUserKey(authUser?.id ?? null);
-          const period = currentMonthYear();
-          const snapshot = await loadHomeDashboardSnapshot({
-            userKey,
-            month: period.month,
-            year: period.year,
-            loadBudgets: () => useBudgetStore.getState().load(),
-          });
-          if (startupRef.current.generation !== generation) return;
-          setDashboardSeed(snapshot);
+          try {
+            const authUser = useAuthStore.getState().user;
+            const userKey = dashboardUserKey(authUser?.id ?? null);
+            const period = currentMonthYear();
+            const snapshot = await loadHomeDashboardSnapshot({
+              userKey,
+              month: period.month,
+              year: period.year,
+              loadBudgets: () => useBudgetStore.getState().load(),
+            });
+            if (startupRef.current.generation !== generation) return;
+            setDashboardSeed(snapshot);
+          } catch {
+            // Dashboard seed is optional — Home can load its own snapshot.
+            if (startupRef.current.generation !== generation) return;
+            clearDashboardSeed();
+          }
         },
         afterReady: () => {
           const currentUser = useAuthStore.getState().user;
@@ -117,6 +123,20 @@ export default function RootLayout() {
   }, [startup.phase]);
 
   useEffect(() => {
+    if (startup.phase === 'ready') {
+      autoRetryCountRef.current = 0;
+      return;
+    }
+    if (startup.phase !== 'recoverable-error') return;
+    if (autoRetryCountRef.current >= 2) return;
+    autoRetryCountRef.current += 1;
+    const timer = setTimeout(() => {
+      void controller.retry();
+    }, 1_600);
+    return () => clearTimeout(timer);
+  }, [startup.phase, startup.generation, controller]);
+
+  useEffect(() => {
     if (startup.phase !== 'ready') return;
     const loadCategories = useCategoryStore.getState().load;
     const loadAccounts = useAccountStore.getState().load;
@@ -146,18 +166,16 @@ export default function RootLayout() {
     seenUserIdRef.current = user.id;
   }, [startup.phase, user]);
 
-  if (startup.phase === 'recoverable-error') {
-    return (
-      <ErrorState
-        message={startup.error ?? 'SpendWise could not start. Please try again.'}
-        onRetry={() => void controller.retry()}
-      />
-    );
-  }
-
   if (startup.phase !== 'ready') {
     return (
-      <StartupScreen phase={startup.phase} message={startup.message} onReady={hideSplash} />
+      <StartupScreen
+        phase={startup.phase}
+        message={startup.message}
+        onReady={hideSplash}
+        onRetry={
+          startup.phase === 'recoverable-error' ? () => void controller.retry() : undefined
+        }
+      />
     );
   }
 

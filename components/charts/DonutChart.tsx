@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { formatMoney } from '@/utils/currency';
 
 interface Slice {
+  id?: string;
   label: string;
   amount: number;
   color: string;
@@ -47,12 +48,12 @@ export function DonutChart({
               strokeWidth={stroke}
               fill="none"
             />
-            {safeSlices.map((slice) => {
+            {safeSlices.map((slice, index) => {
               const percent = total > 0 ? (slice.amount / total) * 100 : 0;
               const length = (percent / 100) * circumference;
               const circle = (
                 <Circle
-                  key={slice.label}
+                  key={slice.id ?? `${slice.label}-${index}`}
                   cx={size / 2}
                   cy={size / 2}
                   r={radius}

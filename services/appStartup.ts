@@ -24,7 +24,7 @@ export function startupStatusLabel(phase: StartupPhase): string {
     case 'loading-dashboard':
       return 'Loading your financial overview…';
     case 'recoverable-error':
-      return 'SpendWise could not finish starting.';
+      return 'Still preparing SpendWise…';
     case 'ready':
       return 'Ready';
     case 'initializing':

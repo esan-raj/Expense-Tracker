@@ -12,7 +12,8 @@ import { settingsRepository } from '@/database/repositories/settingsRepository';
 import { syncQueueRepository, syncStateRepository } from '@/database/repositories/syncQueueRepository';
 import { getCurrentUserId, setCurrentUserId } from '@/database/session';
 import { resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogic';
-import { logError } from '@/utils/errors';
+import { collectSyncDependencyRefs, missingDependencyIds } from '@/utils/syncDependencies';
+import { getErrorMessage, logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
 import type { SyncStatus } from '@/types/sync';
 import { bumpFinanceRevision } from '@/services/financeRevision';
@@ -90,6 +91,15 @@ async function applyRemoteRecord(
 
 export const syncService = {
   async claimLocalData(userId: string): Promise<void> {
+    await this.claimUnassigned(userId);
+    await syncStateRepository.save({ userId });
+    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    await categoryDedupeService.apply();
+    await this.queueExistingLocal();
+  },
+
+  /** Claim unowned local rows without re-enqueueing the entire dataset. */
+  async claimUnassigned(userId: string): Promise<void> {
     setCurrentUserId(userId);
     await Promise.all([
       transactionRepository.claimUnassigned(userId),
@@ -100,9 +110,36 @@ export const syncService = {
       investmentRepository.claimUnassigned(userId),
     ]);
     await syncStateRepository.save({ userId });
-    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
-    await categoryDedupeService.apply();
-    await this.queueExistingLocal();
+  },
+
+  /**
+   * Ensure categories/accounts referenced by pending transactions (etc.) are in the outbox
+   * before those dependents are pushed — prevents remote FK 23503 failures.
+   */
+  async ensurePushDependencies(): Promise<void> {
+    const userId = getCurrentUserId();
+    if (!userId) return;
+
+    await this.claimUnassigned(userId);
+
+    const queue = await syncQueueRepository.list();
+    const refs = collectSyncDependencyRefs(queue);
+    const missingCategories = missingDependencyIds(refs.categoryIds, queue, 'category');
+    const missingAccounts = missingDependencyIds(refs.accountIds, queue, 'account');
+
+    for (const categoryId of missingCategories) {
+      const category = await categoryRepository.getByIdIncludingDeleted(categoryId);
+      if (!category) continue;
+      await syncQueueRepository.enqueue('category', categoryId, 'update', category);
+      syncLog(`queued missing category dependency ${categoryId.slice(0, 8)}…`);
+    }
+
+    for (const accountId of missingAccounts) {
+      const account = await accountRepository.getByIdIncludingDeleted(accountId);
+      if (!account) continue;
+      await syncQueueRepository.enqueue('account', accountId, 'update', account);
+      syncLog(`queued missing account dependency ${accountId.slice(0, 8)}…`);
+    }
   },
 
   async queueExistingLocal(): Promise<void> {
@@ -130,6 +167,7 @@ export const syncService = {
 
   async pushLocalChanges(): Promise<void> {
     if (!isSupabaseConfigured() || !getCurrentUserId()) return;
+    await this.ensurePushDependencies();
     const queue = sortQueueForPush(await syncQueueRepository.list());
     syncLog('starting push');
     for (const item of queue) {
@@ -158,11 +196,7 @@ export const syncService = {
       } catch (error) {
         logError(`sync[${item.entityType}][${item.operation}]`, error);
         const nextRetry = item.retryCount + 1;
-        await syncQueueRepository.markFailure(
-          item.id,
-          error instanceof Error ? error.message : 'Sync failed',
-          nextRetry
-        );
+        await syncQueueRepository.markFailure(item.id, getErrorMessage(error, 'Sync failed'), nextRetry);
         if (!shouldRetry(nextRetry)) {
           continue;
         }
@@ -278,7 +312,7 @@ async function executePullRemoteChanges(): Promise<void> {
   for (const item of transactions) await applyRemoteRecord('transaction', item);
   for (const item of budgets) await applyRemoteRecord('budget', item);
 
-  if (categories.length > 0) {
+  if (categories.length > 0 && !since) {
     const keep = new Set(categories.map((item) => item.id));
     const local = await categoryRepository.list();
     for (const category of local) {
@@ -291,6 +325,9 @@ async function executePullRemoteChanges(): Promise<void> {
         await categoryRepository.hide(category.id);
       }
     }
+    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    await categoryDedupeService.apply();
+  } else if (categories.length > 0) {
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
   }
@@ -355,7 +392,7 @@ async function executeFullSync(): Promise<void> {
     logError('sync.full', error);
     await syncStateRepository.save({
       status: 'error',
-      lastError: error instanceof Error ? error.message : 'Sync failed',
+      lastError: getErrorMessage(error, 'Sync failed'),
     });
     emit('error', (await syncStateRepository.get()).lastSyncedAt, await syncQueueRepository.count());
   }

@@ -161,12 +161,8 @@ export const transactionRepository = {
 
   async count(query: TransactionQuery = {}): Promise<number> {
     const db = await getRxDatabase();
-    const search = query.filters?.search?.trim();
-    const selector = transactionSelector(query.filters);
-    if (!search) {
-      return db.transactions.count({ selector }).exec();
-    }
     const lookups = await loadLookups(db);
+    const selector = transactionSelector(query.filters);
     const rows = await db.transactions.find({ selector }).exec();
     return rows
       .map((row) => row.toMutableJSON())

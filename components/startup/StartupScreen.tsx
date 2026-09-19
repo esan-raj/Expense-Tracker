@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AccessibilityInfo, Animated, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { SpendWiseLogo } from '@/components/brand/SpendWiseLogo';
@@ -10,16 +10,22 @@ export function StartupScreen({
   phase,
   message,
   onReady,
+  onRetry,
 }: {
   phase: StartupPhase;
   message?: string;
   onReady?: () => void;
+  onRetry?: () => void;
 }) {
   const { colors } = useTheme();
   const reduceMotion = useReducedMotion();
   const pulse = useRef(new Animated.Value(0.4)).current;
   const announcedRef = useRef<string | null>(null);
-  const label = message?.trim() || startupStatusLabel(phase);
+  const label =
+    phase === 'recoverable-error'
+      ? startupStatusLabel(phase)
+      : message?.trim() || startupStatusLabel(phase);
+  const showRetry = phase === 'recoverable-error' && typeof onRetry === 'function';
 
   useEffect(() => {
     if (reduceMotion) {
@@ -55,6 +61,19 @@ export function StartupScreen({
         <Animated.View style={[styles.bar, { backgroundColor: colors.primary, opacity: pulse }]} />
       </View>
       <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
+      {showRetry ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Retry starting SpendWise"
+          onPress={onRetry}
+          style={({ pressed }) => [
+            styles.retry,
+            { backgroundColor: colors.primary, opacity: pressed ? 0.85 : 1 },
+          ]}
+        >
+          <Text style={[styles.retryLabel, { color: colors.onPrimary }]}>Retry</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -64,4 +83,13 @@ const styles = StyleSheet.create({
   track: { width: 88, height: 4, borderRadius: 2, overflow: 'hidden' },
   bar: { width: '100%', height: '100%' },
   label: { marginTop: 4, fontSize: 15, fontWeight: '600', textAlign: 'center', lineHeight: 22 },
+  retry: {
+    marginTop: 8,
+    minWidth: 140,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  retryLabel: { fontSize: 15, fontWeight: '700' },
 });

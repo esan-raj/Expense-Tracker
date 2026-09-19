@@ -4,7 +4,7 @@ import type { TransactionDoc } from '@/database/types';
 
 export const transactionSchema: RxJsonSchema<TransactionDoc> = {
   title: 'transactions',
-  version: 1,
+  version: 2,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -54,6 +54,7 @@ export const transactionSchema: RxJsonSchema<TransactionDoc> = {
     'categoryId',
     'transferGroupId',
     'updatedAt',
+    ['userId', 'deletedAt'],
     ['categoryId', 'deletedAt'],
     ['accountId', 'deletedAt'],
   ],

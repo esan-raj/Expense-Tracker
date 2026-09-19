@@ -151,7 +151,7 @@ export default function HomeScreen() {
       ) : null}
       <View style={{ marginTop: 16 }}>
         <DeferredSection height={88}>
-          <BarChart data={data.weekSeries} height={88} />
+          <BarChart data={data.weekSeries} height={88} showValues={false} />
         </DeferredSection>
       </View>
       {data.topCategories.length > 0 ? (

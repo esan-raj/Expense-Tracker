@@ -97,27 +97,32 @@ function dateOnly(value: string): string {
   return value.slice(0, 10);
 }
 
+/** RxDB stores nullables as ''; Postgres UUID/timestamptz/check columns need null. */
+function nullIfEmpty(value: string | null | undefined): string | null {
+  return value ? value : null;
+}
+
 export function toRemoteTransaction(item: Transaction, userId: string): RemoteTransaction {
   return {
     id: item.id,
     user_id: userId,
     type: item.type,
     amount: item.amount,
-    category_id: item.categoryId || null,
+    category_id: nullIfEmpty(item.categoryId),
     title: item.title,
-    description: item.description,
+    description: nullIfEmpty(item.description),
     date: `${item.date}T00:00:00.000Z`,
     payment_method: item.paymentMethod,
-    notes: item.notes,
+    notes: nullIfEmpty(item.notes),
     is_recurring: item.isRecurring,
-    recurring_id: item.recurringId,
-    account_id: item.accountId,
-    is_transfer: item.isTransfer,
-    transfer_group_id: item.transferGroupId,
-    transfer_role: item.transferRole,
+    recurring_id: nullIfEmpty(item.recurringId),
+    account_id: nullIfEmpty(item.accountId),
+    is_transfer: Boolean(item.isTransfer),
+    transfer_group_id: nullIfEmpty(item.transferGroupId),
+    transfer_role: (nullIfEmpty(item.transferRole) as 'source' | 'destination' | null),
     created_at: item.createdAt,
     updated_at: item.updatedAt,
-    deleted_at: (item as Transaction & { deletedAt?: string | null }).deletedAt ?? null,
+    deleted_at: nullIfEmpty((item as Transaction & { deletedAt?: string | null }).deletedAt),
   };
 }
 
@@ -151,14 +156,14 @@ export function toRemoteAccount(item: Account, userId: string): RemoteAccount {
     user_id: userId,
     name: item.name,
     type: item.type,
-    institution_name: item.institutionName,
+    institution_name: nullIfEmpty(item.institutionName),
     currency: item.currency,
     opening_balance: item.openingBalance,
     credit_limit: item.creditLimit,
     is_active: item.isActive,
     created_at: item.createdAt,
     updated_at: item.updatedAt,
-    deleted_at: item.deletedAt ?? null,
+    deleted_at: nullIfEmpty(item.deletedAt),
   };
 }
 
@@ -190,7 +195,7 @@ export function toRemoteCategory(item: Category, userId: string): RemoteCategory
     is_default: item.isDefault,
     created_at: item.createdAt,
     updated_at: item.updatedAt ?? item.createdAt,
-    deleted_at: item.deletedAt ?? null,
+    deleted_at: nullIfEmpty(item.deletedAt),
   };
 }
 
@@ -213,13 +218,13 @@ export function toRemoteBudget(item: Budget, userId: string): RemoteBudget {
   return {
     id: item.id,
     user_id: userId,
-    category_id: item.categoryId,
+    category_id: nullIfEmpty(item.categoryId),
     amount: item.amount,
     month: item.month,
     year: item.year,
     created_at: item.createdAt,
     updated_at: item.updatedAt,
-    deleted_at: (item as Budget & { deletedAt?: string | null }).deletedAt ?? null,
+    deleted_at: nullIfEmpty((item as Budget & { deletedAt?: string | null }).deletedAt),
   };
 }
 
@@ -244,16 +249,16 @@ export function toRemoteRecurring(item: RecurringTransaction, userId: string): R
     title: item.title,
     amount: item.amount,
     type: item.type,
-    category_id: item.categoryId,
+    category_id: nullIfEmpty(item.categoryId),
     frequency: item.frequency,
     start_date: item.startDate,
     next_date: item.nextDate,
     payment_method: item.paymentMethod,
     is_active: item.isActive,
-    account_id: item.accountId,
+    account_id: nullIfEmpty(item.accountId),
     created_at: item.createdAt,
     updated_at: item.updatedAt,
-    deleted_at: (item as RecurringTransaction & { deletedAt?: string | null }).deletedAt ?? null,
+    deleted_at: nullIfEmpty((item as RecurringTransaction & { deletedAt?: string | null }).deletedAt),
   };
 }
 
@@ -303,11 +308,11 @@ export function toRemoteInvestment(item: Investment, userId: string): RemoteInve
     invested_amount: item.investedAmount,
     current_value: item.currentValue,
     investment_date: item.investmentDate,
-    account_id: item.accountId || null,
-    notes: item.notes || null,
+    account_id: nullIfEmpty(item.accountId),
+    notes: nullIfEmpty(item.notes),
     created_at: item.createdAt,
     updated_at: item.updatedAt,
-    deleted_at: item.deletedAt || null,
+    deleted_at: nullIfEmpty(item.deletedAt),
   };
 }
 

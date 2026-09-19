@@ -26,6 +26,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     console.info('[supabase][auth] user authenticated:', Boolean(user));
     if (user) {
       setCurrentUserId(user.id);
+      await syncService.claimUnassigned(user.id);
     } else {
       setCurrentUserId(null);
       const state = await syncStateRepository.get();

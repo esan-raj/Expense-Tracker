@@ -119,6 +119,9 @@ export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): P
     multiInstance: isMultiInstance(),
     closeDuplicates: true,
     eventReduce: true,
+    // Scoped selectors use userId $in [user, ''] which cannot fully match a single index.
+    // SpendWise datasets are local/personal-size; prefer correctness over blocking QU14.
+    allowSlowCount: true,
   });
 
   try {
@@ -127,6 +130,7 @@ export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): P
         schema: transactionSchema,
         migrationStrategies: {
           1: (doc) => doc,
+          2: (doc) => doc,
         },
       },
       categories: { schema: categorySchema },

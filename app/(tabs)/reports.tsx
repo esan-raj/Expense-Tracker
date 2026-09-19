@@ -127,7 +127,7 @@ export default function ReportsScreen() {
                 />
                 <Card>
                   <Text style={[styles.section, { color: colors.textPrimary }]}>Spending trend</Text>
-                  <BarChart data={data.expenseTrend.slice(-14)} />
+                  <BarChart data={data.expenseTrend.slice(-7)} />
                 </Card>
                 <Card>
                   <Text style={[styles.section, { color: colors.textPrimary }]}>Income vs expenses</Text>
@@ -152,7 +152,15 @@ export default function ReportsScreen() {
             {tab === 'categories' ? (
               <Card>
                 <Text style={[styles.section, { color: colors.textPrimary }]}>Expense by category</Text>
-                <DonutChart slices={data.categories.map((item) => ({ label: item.categoryName, amount: item.amount, color: item.categoryColor, percent: item.percent }))} />
+                <DonutChart
+                  slices={data.categories.map((item) => ({
+                    id: item.categoryId,
+                    label: item.categoryName,
+                    amount: item.amount,
+                    color: item.categoryColor,
+                    percent: item.percent,
+                  }))}
+                />
                 {data.categories.map((item) => (
                   <View key={item.categoryId} style={styles.legend}>
                     <View style={[styles.dot, { backgroundColor: item.categoryColor }]} />
