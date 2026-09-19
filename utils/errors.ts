@@ -12,9 +12,8 @@ export class AppError extends Error {
 }
 
 export function logError(context: string, error: unknown): void {
-  if (__DEV__) {
-    console.error(`[SpendWise] ${context}`, error);
-  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  console.error(`[SpendWise] ${context}: ${message}`);
 }
 
 export function toUserMessage(error: unknown, fallback: string): string {

@@ -81,11 +81,23 @@ function logReadyCollections(db: SpendWiseDatabase): void {
   }
 }
 
+async function notifyNativeStorage(action: 'flush' | 'invalidate'): Promise<void> {
+  if (isTestRuntime()) return;
+  const storage = await import('./storage');
+  if (action === 'invalidate') {
+    storage.invalidatePersistentStorage();
+    return;
+  }
+  await storage.flushPersistentStorage();
+}
+
 async function wipeLocalDatabase(name: string): Promise<void> {
+  await notifyNativeStorage('invalidate');
   if (database && database.name === name) {
     await database.remove();
     database = null;
     rxLog('reset', `removed local database ${name} (RxDB instance)`);
+    await notifyNativeStorage('flush');
     return;
   }
   const storage = await getRawStorage();
@@ -93,6 +105,7 @@ async function wipeLocalDatabase(name: string): Promise<void> {
   rxLog('reset', `removed local database ${name}`, {
     collections: removed.join(',') || 'none',
   });
+  await notifyNativeStorage('flush');
 }
 
 export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): Promise<SpendWiseDatabase> {
@@ -195,6 +208,7 @@ export async function resetSpendWiseDatabase(): Promise<SpendWiseDatabase> {
 }
 
 export async function resetDatabaseConnection(): Promise<void> {
+  await notifyNativeStorage('flush');
   if (database) {
     await database.close();
   }

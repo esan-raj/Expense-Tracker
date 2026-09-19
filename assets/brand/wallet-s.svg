@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">SpendWise Wallet S logo</title>
+  <desc id="desc">Emerald and deep teal wallet shapes form an S on a warm white rounded square.</desc>
+  <rect x="24" y="24" width="976" height="976" rx="220" fill="#FAF9F6"/>
+  <g transform="translate(0 10)">
+    <path fill="#11B47B" d="M462 190H724C763 190 786 214 786 253V348C786 395 762 426 721 431C708 433 696 431 680 427L535 381C495 368 463 394 463 432V527C463 545 451 552 433 547L351 519C278 496 226 440 226 361C226 269 315 190 410 190Z"/>
+    <path fill="#004B4E" d="M506 416C506 411 510 408 516 410L677 459C753 482 790 539 790 612V686C790 747 753 789 693 789H295C249 789 225 764 225 721V612C225 567 251 543 287 543C298 543 309 545 323 550L438 588C472 599 506 575 506 539Z"/>
+    <rect x="591" y="517" width="120" height="34" rx="17" fill="#FAF9F6"/>
+  </g>
+</svg>

@@ -7,7 +7,7 @@ import { Sparkline } from '@/components/charts/Sparkline';
 import { UtilizationRing } from '@/components/charts/UtilizationRing';
 import { useTheme } from '@/hooks/useTheme';
 import { formatMoney } from '@/utils/currency';
-import { accountIcon, accountTypeLabel, isLiabilityAccount } from '@/utils/accountLogic';
+import { accountIcon, accountTypeLabel, isCashHolding, isLiabilityAccount } from '@/utils/accountLogic';
 import { isMeaningfulSeries, seriesTrendPercent, visualizationForAccount } from '@/utils/accountSeries';
 import { radius, spacing } from '@/constants/theme';
 import type { AccountWithBalances, CurrencyCode } from '@/types';
@@ -25,7 +25,7 @@ export function AccountCard({
   const visualization = visualizationForAccount(account.type);
   const liability = isLiabilityAccount(account.type);
   const headline = liability ? account.outstanding : account.currentBalance;
-  const headlineLabel = liability ? 'Outstanding' : 'Available balance';
+  const headlineLabel = liability ? 'Outstanding' : isCashHolding(account.type) ? 'Cash on hand' : 'Bank balance';
   const series = account.balanceSeries ?? [];
   const trend = !liability ? seriesTrendPercent(series) : null;
   const showSpark = visualization === 'balance-trend' && isMeaningfulSeries(series);

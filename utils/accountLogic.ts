@@ -17,6 +17,14 @@ export function isLiabilityAccount(type: AccountType): boolean {
   return type === 'credit_card' || type === 'loan';
 }
 
+export function isCashHolding(type: AccountType): boolean {
+  return type === 'cash' || type === 'wallet';
+}
+
+export function isBankHolding(type: AccountType): boolean {
+  return type === 'bank' || type === 'other';
+}
+
 export function isTransferEntry(entry: Pick<AccountLedgerEntry, 'isTransfer'>): boolean {
   return Boolean(entry.isTransfer);
 }
@@ -117,12 +125,16 @@ export function summarizeAccounts(accounts: Array<Account & { entries: AccountLe
       if (isLiabilityAccount(account.type)) {
         acc.creditOutstanding += balances.outstanding;
         acc.availableCredit += balances.availableCredit ?? 0;
+      } else if (isCashHolding(account.type)) {
+        acc.cashBalance += balances.currentBalance;
+      } else if (isBankHolding(account.type) || account.type === 'investment') {
+        acc.bankBalance += balances.currentBalance;
       } else {
         acc.bankBalance += balances.currentBalance;
       }
       return acc;
     },
-    { bankBalance: 0, creditOutstanding: 0, availableCredit: 0 }
+    { bankBalance: 0, cashBalance: 0, creditOutstanding: 0, availableCredit: 0 }
   );
 }
 

@@ -24,7 +24,9 @@ export function Screen({ children, scroll = false, padded = true, style }: Scree
   const { colors } = useTheme();
   const { isDesktop } = useBreakpoint();
   const content = (
-    <View style={[styles.body, padded && styles.padded, isDesktop && styles.desktop, style]}>{children}</View>
+    <View style={[scroll ? styles.scrollBody : styles.body, padded && styles.padded, isDesktop && styles.desktop, style]}>
+      {children}
+    </View>
   );
 
   return (
@@ -54,8 +56,9 @@ export function Screen({ children, scroll = false, padded = true, style }: Scree
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   flex: { flex: 1, minHeight: 0 },
-  body: { flex: 1, minHeight: 0 },
+  body: { flex: 1, minHeight: 0, width: '100%', maxWidth: '100%' },
+  scrollBody: { width: '100%', maxWidth: '100%' },
   padded: { paddingHorizontal: spacing.lg },
   desktop: { paddingHorizontal: 28, maxWidth: contentMaxWidth, width: '100%', alignSelf: 'center' },
-  scroll: { flexGrow: 1, paddingBottom: 40 },
+  scroll: { flexGrow: 1, paddingBottom: 40, width: '100%' },
 });

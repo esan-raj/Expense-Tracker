@@ -13,7 +13,7 @@ interface ErrorStateProps {
 export function ErrorState({ message, onRetry, title = 'Couldn’t load this screen' }: ErrorStateProps) {
   const { colors } = useTheme();
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, { backgroundColor: colors.background }]}>
       <View style={[styles.iconWrap, { backgroundColor: colors.primaryMuted }]}>
         <Ionicons name="alert-circle-outline" size={26} color={colors.primary} />
       </View>

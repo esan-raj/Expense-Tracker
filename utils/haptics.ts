@@ -15,6 +15,10 @@ AccessibilityInfo.addEventListener('reduceMotionChanged', (value) => {
   reduceMotion = value;
 });
 
+export function getReduceMotionPreferred(): boolean {
+  return reduceMotion;
+}
+
 export async function hapticSuccess(): Promise<void> {
   if (reduceMotion) return;
   await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

@@ -1,57 +1,75 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
 import { Input } from '@/components/ui/Input';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
+import { AccountForm } from '@/components/forms/AccountForm';
 import { useTheme } from '@/hooks/useTheme';
 import { useCategoryStore } from '@/store/useCategoryStore';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { categoryService } from '@/services/categoryService';
 import { FREQUENCIES, PAYMENT_METHODS } from '@/utils/constants';
 import { transactionFormSchema, type TransactionFormValues } from '@/utils/validation';
 import { fromMinorUnits, parseAmountInput, toMinorUnits } from '@/utils/currency';
 import { getCurrency } from '@/constants/currencies';
 import { todayKey } from '@/utils/dates';
-import { accountTypeLabel } from '@/utils/accountLogic';
-import type { TransactionWithCategory } from '@/types';
+import { accountTypeLabel, isCashHolding } from '@/utils/accountLogic';
+import { normalizeOptionLabel } from '@/utils/optionLabel';
+import { AppError, toUserMessage } from '@/utils/errors';
+import type { AccountType, CategoryType, TransactionWithCategory } from '@/types';
+import { useCriticalWork } from '@/hooks/useCriticalWork';
 
 interface TransactionFormProps {
   initial?: TransactionWithCategory;
+  defaults?: {
+    accountId?: string;
+    entryType?: 'expense' | 'income' | 'transfer';
+    sourceAccountId?: string;
+    destinationAccountId?: string;
+  };
   submitting?: boolean;
   onSubmit: (values: TransactionFormValues & { amountMinor: number }) => void;
 }
 
-export function TransactionForm({ initial, submitting, onSubmit }: TransactionFormProps) {
+export function TransactionForm({ initial, defaults, submitting, onSubmit }: TransactionFormProps) {
+  useCriticalWork('transaction-form');
   const { colors } = useTheme();
   const categories = useCategoryStore((state) => state.categories);
+  const loadCategories = useCategoryStore((state) => state.load);
   const accounts = useAccountStore((state) => state.accounts);
   const lastUsedId = useAccountStore((state) => state.lastUsedId);
   const loadAccounts = useAccountStore((state) => state.load);
+  const createAccount = useAccountStore((state) => state.create);
   const currency = useSettingsStore((state) => getCurrency(state.settings.currency));
+  const [accountDraft, setAccountDraft] = useState<AccountType | null>(null);
+  const [savingAccount, setSavingAccount] = useState(false);
 
   useEffect(() => {
     void loadAccounts();
-  }, [loadAccounts]);
+    void loadCategories();
+  }, [loadAccounts, loadCategories]);
 
   const activeAccounts = accounts.filter((item) => item.isActive);
-  const defaultAccount = initial?.accountId ?? lastUsedId ?? activeAccounts[0]?.id ?? '';
+  const defaultAccount = defaults?.accountId ?? initial?.accountId ?? lastUsedId ?? activeAccounts[0]?.id ?? '';
 
   const form = useForm<TransactionFormValues>({
     resolver: zodResolver(transactionFormSchema),
     defaultValues: {
-      entryType: initial?.isTransfer ? 'transfer' : (initial?.type ?? 'expense'),
-      type: initial?.type ?? 'expense',
+      entryType: defaults?.entryType ?? (initial?.isTransfer ? 'transfer' : (initial?.type ?? 'expense')),
+      type: defaults?.entryType === 'transfer' ? 'expense' : (defaults?.entryType ?? initial?.type ?? 'expense'),
       amount: initial ? fromMinorUnits(initial.amount, currency.decimals) : 0,
       title: initial?.title ?? '',
       categoryId: initial?.categoryId ?? '',
       accountId: defaultAccount,
-      sourceAccountId: '',
-      destinationAccountId: '',
+      sourceAccountId: defaults?.sourceAccountId ?? '',
+      destinationAccountId: defaults?.destinationAccountId ?? '',
       date: initial?.date ?? todayKey(),
       paymentMethod: initial?.paymentMethod ?? 'upi',
       notes: initial?.notes ?? '',
@@ -64,6 +82,7 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
   const entryType = form.watch('entryType');
   const type = form.watch('type');
   const isRecurring = form.watch('isRecurring');
+  const accountId = form.watch('accountId');
   const [showMore, setShowMore] = useState(Boolean(initial?.notes || initial?.isRecurring));
   const categoryOptions = useMemo(
     () =>
@@ -76,10 +95,39 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
     value: item.id,
     label: `${item.name} · ${accountTypeLabel(item.type)}`,
   }));
-  const allAccountOptions = accounts.map((item) => ({
-    value: item.id,
-    label: `${item.name}${item.isActive ? '' : ' (archived)'}`,
-  }));
+  const allAccountOptions = accounts
+    .filter((item) => item.isActive || item.id === accountId)
+    .map((item) => ({
+      value: item.id,
+      label: `${item.name}${item.isActive ? '' : ' (archived)'} · ${accountTypeLabel(item.type)}`,
+    }));
+
+  useEffect(() => {
+    const selected = accounts.find((item) => item.id === accountId);
+    if (selected && isCashHolding(selected.type) && form.getValues('paymentMethod') === 'upi' && !initial) {
+      form.setValue('paymentMethod', 'cash');
+    }
+  }, [accountId, accounts, form, initial]);
+
+  const createCategory = async (name: string) => {
+    if (normalizeOptionLabel(name) === 'transfer') {
+      throw new AppError('Transfer is reserved for account movements.');
+    }
+    const categoryType: CategoryType = type;
+    const created = await categoryService.createOrFind({
+      name,
+      icon: categoryType === 'income' ? 'cash' : 'ellipse',
+      color: categoryType === 'income' ? '#059669' : '#64748B',
+      type: categoryType,
+    });
+    await loadCategories();
+    return created.id;
+  };
+
+  const accountActions = [
+    { label: 'Add account', onPress: () => setAccountDraft('bank') },
+    { label: 'Add cash wallet', onPress: () => setAccountDraft('cash') },
+  ];
 
   return (
     <View style={styles.form}>
@@ -120,7 +168,7 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
             label="Title"
             value={field.value}
             onChangeText={field.onChange}
-            placeholder={entryType === 'transfer' ? 'Card payment' : 'Lunch at Cafe'}
+            placeholder={entryType === 'transfer' ? 'Cash withdrawal or deposit' : 'Lunch at Cafe'}
             error={fieldState.error?.message}
           />
         )}
@@ -131,12 +179,13 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
             control={form.control}
             name="sourceAccountId"
             render={({ field, fieldState }) => (
-              <Select
+              <SearchableSelect
                 label="From"
                 value={field.value ?? ''}
                 options={accountOptions}
                 onChange={field.onChange}
                 error={fieldState.error?.message}
+                actions={accountActions}
               />
             )}
           />
@@ -144,12 +193,13 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
             control={form.control}
             name="destinationAccountId"
             render={({ field, fieldState }) => (
-              <Select
+              <SearchableSelect
                 label="To"
                 value={field.value ?? ''}
                 options={accountOptions}
                 onChange={field.onChange}
                 error={fieldState.error?.message}
+                actions={accountActions}
               />
             )}
           />
@@ -160,12 +210,14 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
             control={form.control}
             name="categoryId"
             render={({ field, fieldState }) => (
-              <Select
+              <SearchableSelect
                 label="Category"
                 value={field.value ?? ''}
                 options={categoryOptions}
                 onChange={field.onChange}
                 error={fieldState.error?.message}
+                allowCreate
+                onCreate={createCategory}
               />
             )}
           />
@@ -173,13 +225,14 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
             control={form.control}
             name="accountId"
             render={({ field, fieldState }) => (
-              <Select
+              <SearchableSelect
                 label="Account"
                 value={field.value ?? ''}
                 placeholder="No account (legacy)"
-                options={allAccountOptions.filter((item) => item.value && (activeAccounts.some((acc) => acc.id === item.value) || item.value === field.value))}
+                options={allAccountOptions.filter((item) => item.value)}
                 onChange={field.onChange}
                 error={fieldState.error?.message}
+                actions={accountActions}
               />
             )}
           />
@@ -282,6 +335,46 @@ export function TransactionForm({ initial, submitting, onSubmit }: TransactionFo
           })
         )}
       />
+      <Modal visible={accountDraft != null} transparent animationType="fade" onRequestClose={() => setAccountDraft(null)}>
+        <Pressable style={[styles.overlay, { backgroundColor: colors.overlay }]} onPress={() => setAccountDraft(null)}>
+          <Pressable style={[styles.sheet, { backgroundColor: colors.surfaceElevated }]} onPress={() => undefined}>
+            <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
+              {accountDraft === 'cash' ? 'Add cash wallet' : 'Add account'}
+            </Text>
+            {accountDraft ? (
+              <AccountForm
+                defaultType={accountDraft}
+                submitting={savingAccount}
+                onSubmit={async (values) => {
+                  setSavingAccount(true);
+                  try {
+                    const created = await createAccount({
+                      type: values.type,
+                      name: values.name,
+                      institutionName: values.institutionName,
+                      currency: currency.code,
+                      openingBalance: values.openingMinor,
+                      creditLimit: values.limitMinor,
+                    });
+                    if (form.getValues('entryType') === 'transfer') {
+                      if (!form.getValues('sourceAccountId')) form.setValue('sourceAccountId', created.id);
+                      else form.setValue('destinationAccountId', created.id);
+                    } else {
+                      form.setValue('accountId', created.id);
+                    }
+                    setAccountDraft(null);
+                  } catch (error) {
+                    Alert.alert('Could not save', toUserMessage(error, 'Please try again.'));
+                  } finally {
+                    setSavingAccount(false);
+                  }
+                }}
+              />
+            ) : null}
+            <Button title="Cancel" variant="ghost" onPress={() => setAccountDraft(null)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -297,4 +390,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   flex: { flex: 1 },
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '90%' },
+  sheetTitle: { fontSize: 20, fontWeight: '800', marginBottom: 12 },
 });

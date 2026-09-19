@@ -9,20 +9,29 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { accountFormSchema, type AccountFormValues } from '@/utils/validation';
 import { fromMinorUnits, parseAmountInput, toMinorUnits } from '@/utils/currency';
 import { getCurrency } from '@/constants/currencies';
-import type { Account } from '@/types';
+import type { Account, AccountType } from '@/types';
+import { useCriticalWork } from '@/hooks/useCriticalWork';
 
 interface AccountFormProps {
   initial?: Account;
+  defaultType?: AccountType;
   submitting?: boolean;
   onSubmit: (values: AccountFormValues & { openingMinor: number; limitMinor: number | null }) => void;
 }
 
-export function AccountForm({ initial, submitting, onSubmit }: AccountFormProps) {
+function resolveType(initial?: Account, defaultType?: AccountType): AccountType {
+  if (initial?.type) return initial.type;
+  if (defaultType) return defaultType;
+  return 'bank';
+}
+
+export function AccountForm({ initial, defaultType, submitting, onSubmit }: AccountFormProps) {
+  useCriticalWork('account-form');
   const currency = useSettingsStore((state) => getCurrency(state.settings.currency));
   const form = useForm<AccountFormValues>({
     resolver: zodResolver(accountFormSchema),
     defaultValues: {
-      type: initial?.type === 'credit_card' ? 'credit_card' : 'bank',
+      type: resolveType(initial, defaultType),
       name: initial?.name ?? '',
       institutionName: initial?.institutionName ?? '',
       openingBalance: initial ? fromMinorUnits(initial.openingBalance, currency.decimals) : 0,
@@ -30,6 +39,17 @@ export function AccountForm({ initial, submitting, onSubmit }: AccountFormProps)
     },
   });
   const type = form.watch('type');
+  const typeOptions: { value: AccountType; label: string }[] = [
+    { value: 'bank', label: 'Bank' },
+    { value: 'cash', label: 'Cash' },
+    { value: 'credit_card', label: 'Card' },
+  ];
+  if (type === 'wallet' && !typeOptions.some((item) => item.value === 'wallet')) {
+    typeOptions.splice(2, 0, { value: 'wallet', label: 'Wallet' });
+  }
+  if ((type === 'investment' || type === 'loan' || type === 'other') && !typeOptions.some((item) => item.value === type)) {
+    typeOptions.push({ value: type, label: type === 'loan' ? 'Loan' : type === 'investment' ? 'Investment' : 'Other' });
+  }
 
   return (
     <View style={styles.form}>
@@ -37,14 +57,7 @@ export function AccountForm({ initial, submitting, onSubmit }: AccountFormProps)
         control={form.control}
         name="type"
         render={({ field }) => (
-          <SegmentedControl
-            value={field.value === 'credit_card' ? 'credit_card' : 'bank'}
-            onChange={field.onChange}
-            options={[
-              { value: 'bank', label: 'Bank Account' },
-              { value: 'credit_card', label: 'Credit Card' },
-            ]}
-          />
+          <SegmentedControl value={field.value} onChange={field.onChange} options={typeOptions} />
         )}
       />
       <Controller
@@ -52,21 +65,25 @@ export function AccountForm({ initial, submitting, onSubmit }: AccountFormProps)
         name="name"
         render={({ field, fieldState }) => (
           <Input
-            label="Account name"
+            label={type === 'cash' || type === 'wallet' ? 'Wallet name' : 'Account name'}
             value={field.value}
             onChangeText={field.onChange}
-            placeholder={type === 'credit_card' ? 'HDFC Credit Card' : 'HDFC Bank'}
+            placeholder={
+              type === 'credit_card' ? 'HDFC Credit Card' : type === 'cash' || type === 'wallet' ? 'Cash in hand' : 'HDFC Bank'
+            }
             error={fieldState.error?.message}
           />
         )}
       />
-      <Controller
-        control={form.control}
-        name="institutionName"
-        render={({ field }) => (
-          <Input label="Institution" value={field.value} onChangeText={field.onChange} placeholder="HDFC" />
-        )}
-      />
+      {type === 'cash' || type === 'wallet' ? null : (
+        <Controller
+          control={form.control}
+          name="institutionName"
+          render={({ field }) => (
+            <Input label="Institution" value={field.value} onChangeText={field.onChange} placeholder="HDFC" />
+          )}
+        />
+      )}
       <Controller
         control={form.control}
         name="openingBalance"
@@ -94,7 +111,7 @@ export function AccountForm({ initial, submitting, onSubmit }: AccountFormProps)
         />
       ) : null}
       <Button
-        title={initial ? 'Save account' : 'Add Account'}
+        title={initial ? 'Save account' : type === 'cash' || type === 'wallet' ? 'Add cash wallet' : 'Add Account'}
         loading={submitting}
         onPress={form.handleSubmit((values) =>
           onSubmit({

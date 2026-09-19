@@ -7,7 +7,7 @@ interface CategoryState {
   loading: boolean;
   error: string | null;
   load: () => Promise<void>;
-  create: (input: CategoryInput) => Promise<void>;
+  create: (input: CategoryInput) => Promise<Category>;
   update: (id: string, input: CategoryInput) => Promise<void>;
   remove: (id: string, reassignToId?: string) => Promise<void>;
 }
@@ -29,8 +29,9 @@ export const useCategoryStore = create<CategoryState>((set, get) => ({
     }
   },
   create: async (input) => {
-    await categoryService.create(input);
+    const created = await categoryService.create(input);
     await get().load();
+    return created;
   },
   update: async (id, input) => {
     await categoryService.update(id, input);

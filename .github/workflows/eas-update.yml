@@ -192,7 +192,8 @@ jobs:
 
           FP_JSON="$(mktemp)"
           BUILDS_JSON="$(mktemp)"
-          trap 'rm -f "$FP_JSON" "$BUILDS_JSON"' EXIT
+          LATEST_JSON="$(mktemp)"
+          trap 'rm -f "$FP_JSON" "$BUILDS_JSON" "$LATEST_JSON"' EXIT
           echo "Generating Android fingerprint: eas fingerprint:generate ${FP_ARGS[*]}"
           set +e
           eas fingerprint:generate "${FP_ARGS[@]}" > "$FP_JSON"
@@ -292,9 +293,55 @@ jobs:
             echo "::error::No finished Android build matches fingerprint ${HASH}."
             echo "This JavaScript change requires a new native runtime/build."
             echo "Installed APKs on channel ${CHANNEL} will not receive it."
-            echo "Build and install a replacement binary with the same package id and signing identity:"
+            echo "Build and install a replacement binary with the same package id and signing identity from a clean git tree:"
             echo "  npx eas-cli@latest build --profile ${PROFILE} --platform android"
             echo "Then republish this commit after that APK finishes."
+            echo "EAS Build uploads modified tracked files. Uncommitted icon, splash, or app.json native changes in that upload will not match this commit's fingerprint."
+
+            echo "Comparing this commit's fingerprint to the latest finished ${PROFILE} Android build on channel ${CHANNEL}..."
+            set +e
+            eas build:list --platform android --build-profile "$PROFILE" --channel "$CHANNEL" --status finished --limit 1 --json --non-interactive > "$LATEST_JSON"
+            LATEST_STATUS=$?
+            set -e
+            if [ "$LATEST_STATUS" -ne 0 ] || [ ! -s "$LATEST_JSON" ]; then
+              echo "Could not list a latest ${PROFILE} Android build for source comparison."
+            else
+              OTHER_HASH="$(
+                node -e '
+                  const fs = require("fs");
+                  const raw = fs.readFileSync(process.argv[1], "utf8").trim() || "[]";
+                  let parsed;
+                  try {
+                    parsed = JSON.parse(raw);
+                  } catch (error) {
+                    console.error(`Could not parse latest-build JSON (${error.message}).`);
+                    process.exit(0);
+                  }
+                  const builds = Array.isArray(parsed) ? parsed : parsed.builds || parsed.data || [];
+                  const build = builds[0];
+                  if (!build) process.exit(0);
+                  const hash =
+                    (build.fingerprint && typeof build.fingerprint.hash === "string" && build.fingerprint.hash) ||
+                    (typeof build.fingerprintHash === "string" && build.fingerprintHash) ||
+                    (typeof build.runtimeVersion === "string" && build.runtimeVersion) ||
+                    "";
+                  const id = build.id || "(unknown id)";
+                  const git = build.gitCommitHash || build.gitCommit || "(unknown git)";
+                  console.error(`Latest ${process.env.PROFILE} Android build ${id} git ${git} fingerprint ${hash || "(none)"}`);
+                  process.stdout.write(hash);
+                ' "$LATEST_JSON"
+              )"
+              if [ -z "$OTHER_HASH" ]; then
+                echo "Latest finished ${PROFILE} Android build had no fingerprint hash to compare."
+              elif [ "$OTHER_HASH" = "$HASH" ]; then
+                echo "Latest finished ${PROFILE} Android build already reports fingerprint ${HASH}; matching-build lookup returned none."
+              else
+                echo "Fingerprint source diff versus latest ${PROFILE} APK (generated ${HASH} vs build ${OTHER_HASH}):"
+                set +e
+                eas fingerprint:compare "$HASH" "$OTHER_HASH" --non-interactive
+                set -e
+              fi
+            fi
             exit 1
           fi
           echo "Found ${MATCH_COUNT} finished Android build(s) for this fingerprint."

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { ScreenSkeleton } from '@/components/ui/Skeleton';
+import { LoadingState } from '@/components/ui/LoadingState';
 import { Fab } from '@/components/ui/Fab';
 import { Amount } from '@/components/ui/Amount';
 import { SyncStatusBar } from '@/components/ui/SyncStatusBar';
@@ -16,30 +16,33 @@ import { BalanceHero } from '@/components/cards/BalanceCard';
 import { AccountCard } from '@/components/cards/AccountOverviewCard';
 import { InvestmentsOverviewCard } from '@/components/cards/InvestmentsOverviewCard';
 import { QuickActions } from '@/components/dashboard/QuickActions';
+import { DeferredSection } from '@/components/dashboard/DeferredSection';
 import { ThemeCustomizer } from '@/components/theme/ThemeCustomizer';
 import { BarChart } from '@/components/charts/BarChart';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { TransactionRow } from '@/components/transactions/TransactionRow';
+import { SpendWiseLogo } from '@/components/brand/SpendWiseLogo';
 import { useTheme } from '@/hooks/useTheme';
+import { useDashboardSnapshot } from '@/hooks/useDashboardSnapshot';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useBudgetStore } from '@/store/useBudgetStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { reportService } from '@/services/reportService';
+import { getFinanceRevision } from '@/services/financeRevision';
 import { formatMoney } from '@/utils/currency';
 import { currentMonthYear, formatMonthYear, greetingForNow } from '@/utils/dates';
 import { calculateBudgetUsage, percentChange } from '@/utils/calculations';
 import { buildDashboardInsights } from '@/utils/insights';
 import { displayFirstName } from '@/utils/displayName';
-import { isLiabilityAccount } from '@/utils/accountLogic';
-import { toUserMessage } from '@/utils/errors';
+import { isBankHolding, isCashHolding } from '@/utils/accountLogic';
 import { spacing } from '@/constants/theme';
 import { useSyncStore } from '@/store/useSyncStore';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
-import type { AccountWithBalances } from '@/types';
+import type { DashboardData } from '@/services/dashboardSnapshot';
+import type { TransactionWithCategory } from '@/types';
 import type { SeriesPoint } from '@/utils/accountSeries';
 
-function mergeCashSeries(accounts: AccountWithBalances[]): SeriesPoint[] {
-  const asset = accounts.filter((item) => !isLiabilityAccount(item.type));
+function mergeCashSeries(accounts: DashboardData['accounts']['cards']): SeriesPoint[] {
+  const asset = accounts.filter((item) => isBankHolding(item.type) || isCashHolding(item.type));
   const template = asset[0]?.balanceSeries;
   if (!template?.length) return [];
   return template.map((point, index) => ({
@@ -53,44 +56,29 @@ export default function HomeScreen() {
   const { isDesktop } = useBreakpoint();
   const settings = useSettingsStore((state) => state.settings);
   const warnings = useBudgetStore((state) => state.warnings);
-  const loadBudgets = useBudgetStore((state) => state.load);
   const syncNow = useSyncStore((state) => state.syncNow);
   const user = useAuthStore((state) => state.user);
-  const [data, setData] = useState<Awaited<ReturnType<typeof reportService.dashboard>> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const period = currentMonthYear();
+  const { snapshot, status, error, reload, refresh } = useDashboardSnapshot(period.month, period.year);
   const [hidden, setHidden] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [range, setRange] = useState<'14d' | '30d'>('14d');
-  const period = currentMonthYear();
+  const [pulling, setPulling] = useState(false);
   const firstName = displayFirstName(user);
-
-  const loadLocal = useCallback(async () => {
-    try {
-      setError(null);
-      const [dashboard] = await Promise.all([
-        reportService.dashboard(period.month, period.year),
-        loadBudgets(),
-      ]);
-      setData(dashboard);
-    } catch (err) {
-      setError(toUserMessage(err, 'We could not load your dashboard.'));
-    } finally {
-      setLoading(false);
-    }
-  }, [loadBudgets, period.month, period.year]);
-
-  useEffect(() => {
-    void loadLocal().then(() => {
-      void syncNow();
-    });
-  }, [loadLocal, syncNow]);
+  const data = snapshot?.dashboard ?? null;
 
   useFocusEffect(
     useCallback(() => {
-      void loadLocal();
-    }, [loadLocal])
+      if (!snapshot) return;
+      if (snapshot.revision !== getFinanceRevision()) {
+        refresh();
+      }
+    }, [snapshot, refresh])
   );
+
+  const openTransaction = useCallback((item: TransactionWithCategory) => {
+    router.push(`/transaction/${item.id}`);
+  }, []);
 
   const cashSeries = useMemo(() => {
     if (!data) return [];
@@ -98,9 +86,16 @@ export default function HomeScreen() {
     return range === '14d' ? merged.slice(-14) : merged;
   }, [data, range]);
 
-  if (loading && !data) return <ScreenSkeleton variant="dashboard" />;
-  if (error && !data) return <ErrorState message={error} onRetry={() => void loadLocal()} />;
-  if (!data) return null;
+  if (status === 'error' && !data) {
+    return <ErrorState message={error ?? 'We could not load your dashboard.'} onRetry={reload} />;
+  }
+  if (!data) {
+    return (
+      <Screen padded={false}>
+        <LoadingState message="Loading your finances…" />
+      </Screen>
+    );
+  }
 
   const overallBudget = warnings.find((item) => item.categoryId === null)?.amount ?? settings.monthlyBudget ?? 0;
   const usage = calculateBudgetUsage(data.expenses, overallBudget || 1);
@@ -118,7 +113,7 @@ export default function HomeScreen() {
       <SectionHeader title="Your accounts" actionLabel="Manage" onAction={() => router.push('/accounts' as never)} />
       {data.accounts.cards.length === 0 ? (
         <Card>
-          <Text style={{ color: colors.textSecondary }}>Add a bank account or credit card to see balances here.</Text>
+          <Text style={{ color: colors.textSecondary }}>Add a bank account, cash wallet, or credit card to see balances here.</Text>
         </Card>
       ) : isDesktop ? (
         <View style={styles.accountGrid}>
@@ -155,7 +150,9 @@ export default function HomeScreen() {
         </View>
       ) : null}
       <View style={{ marginTop: 16 }}>
-        <BarChart data={data.weekSeries} height={88} />
+        <DeferredSection height={88}>
+          <BarChart data={data.weekSeries} height={88} />
+        </DeferredSection>
       </View>
       {data.topCategories.length > 0 ? (
         <View style={{ marginTop: 16, gap: 10 }}>
@@ -180,7 +177,7 @@ export default function HomeScreen() {
         <Text style={{ color: colors.textSecondary }}>Your recent transactions will appear here.</Text>
       ) : (
         data.recent.map((item) => (
-          <TransactionRow key={item.id} item={item} onPress={() => router.push(`/transaction/${item.id}`)} />
+          <TransactionRow key={item.id} item={item} onPress={openTransaction} />
         ))
       )}
     </Card>
@@ -188,16 +185,28 @@ export default function HomeScreen() {
 
   const insightsSection =
     insights.length > 0 ? (
-      <Card>
-        <SectionHeader title="Financial insights" />
-        {insights.map((item) => (
-          <View key={item.id} style={styles.insight}>
-            <Text style={[styles.insightTitle, { color: colors.textPrimary }]}>{item.title}</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{item.detail}</Text>
-          </View>
-        ))}
-      </Card>
+      <DeferredSection height={132}>
+        <Card>
+          <SectionHeader title="Financial insights" />
+          {insights.map((item) => (
+            <View key={item.id} style={styles.insight}>
+              <Text style={[styles.insightTitle, { color: colors.textPrimary }]}>{item.title}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{item.detail}</Text>
+            </View>
+          ))}
+        </Card>
+      </DeferredSection>
     ) : null;
+
+  const investmentsSection = (
+    <DeferredSection height={data.investmentCount > 0 ? 168 : 156}>
+      <InvestmentsOverviewCard
+        summary={data.investments}
+        currency={settings.currency}
+        count={data.investmentCount}
+      />
+    </DeferredSection>
+  );
 
   return (
     <Screen padded={false}>
@@ -206,12 +215,16 @@ export default function HomeScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: isDesktop ? 96 : 112 }]}
         refreshControl={
           <RefreshControl
-            refreshing={loading}
+            refreshing={status === 'refreshing' || pulling}
             onRefresh={() => {
               void (async () => {
-                setLoading(true);
-                await syncNow();
-                await loadLocal();
+                setPulling(true);
+                try {
+                  await syncNow();
+                  await refresh();
+                } finally {
+                  setPulling(false);
+                }
               })();
             }}
           />
@@ -220,9 +233,12 @@ export default function HomeScreen() {
       >
         <View style={styles.header}>
           <View style={styles.headerText}>
-            <Text style={[styles.hello, { color: colors.textPrimary }]}>
-              {greetingForNow()}{firstName ? `, ${firstName}` : ''}
-            </Text>
+            <View style={styles.brandRow}>
+              <SpendWiseLogo size={28} notchColor={colors.background} />
+              <Text style={[styles.hello, { color: colors.textPrimary }]}>
+                {greetingForNow()}{firstName ? `, ${firstName}` : ''}
+              </Text>
+            </View>
             <Text style={[styles.sub, { color: colors.textSecondary }]}>
               Financial overview for {formatMonthYear(period.month, period.year)}
             </Text>
@@ -250,7 +266,7 @@ export default function HomeScreen() {
         </View>
 
         <BalanceHero
-          value={data.accounts.bankBalance}
+          value={data.accounts.bankBalance + data.accounts.cashBalance}
           currency={settings.currency}
           hidden={hidden}
           onToggleHidden={() => setHidden((value) => !value)}
@@ -258,6 +274,9 @@ export default function HomeScreen() {
           series={cashSeries}
           range={range}
           onRangeChange={setRange}
+          bankValue={data.accounts.bankBalance}
+          cashValue={data.accounts.cashBalance}
+          creditAvailable={data.accounts.availableCredit}
         />
 
         <QuickActions />
@@ -266,13 +285,7 @@ export default function HomeScreen() {
         {isDesktop ? (
           <View style={styles.desktopGrid}>
             <View style={styles.desktopCol}>{spendingSection}</View>
-            <View style={styles.desktopCol}>
-              <InvestmentsOverviewCard
-                summary={data.investments}
-                currency={settings.currency}
-                count={data.investmentCount}
-              />
-            </View>
+            <View style={styles.desktopCol}>{investmentsSection}</View>
             <View style={styles.desktopCol}>{insightsSection}</View>
             <View style={styles.desktopCol}>{recentSection}</View>
           </View>
@@ -280,11 +293,7 @@ export default function HomeScreen() {
           <>
             {spendingSection}
             {recentSection}
-            <InvestmentsOverviewCard
-              summary={data.investments}
-              currency={settings.currency}
-              count={data.investmentCount}
-            />
+            {investmentsSection}
             {insightsSection}
           </>
         )}
@@ -301,8 +310,9 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.lg, paddingTop: 8, gap: 20 },
   header: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' },
   headerText: { flex: 1, minWidth: 180 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerActions: { alignItems: 'flex-end', gap: 8 },
-  hello: { fontSize: 26, fontWeight: '800', letterSpacing: -0.6 },
+  hello: { fontSize: 26, fontWeight: '800', letterSpacing: -0.6, flexShrink: 1 },
   sub: { fontSize: 14, marginTop: 4, lineHeight: 20 },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   themeBtn: {

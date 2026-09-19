@@ -21,7 +21,12 @@ import { spacing } from '@/constants/theme';
 
 export default function BudgetsScreen() {
   const { colors } = useTheme();
-  const { items, loading, error, load, month, year } = useBudgetStore();
+  const items = useBudgetStore((state) => state.items);
+  const loading = useBudgetStore((state) => state.loading);
+  const error = useBudgetStore((state) => state.error);
+  const load = useBudgetStore((state) => state.load);
+  const month = useBudgetStore((state) => state.month);
+  const year = useBudgetStore((state) => state.year);
   const currency = useSettingsStore((state) => state.settings.currency);
 
   useEffect(() => {

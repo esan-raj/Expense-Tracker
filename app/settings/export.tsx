@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text } from 'react-native';
 import { Screen } from '@/components/ui/Screen';
 import { Button } from '@/components/ui/Button';
@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useTransactionStore } from '@/store/useTransactionStore';
+import { beginCriticalWork } from '@/store/useCriticalWorkStore';
 import { exportService } from '@/services/exportService';
 import { toUserMessage } from '@/utils/errors';
 
@@ -14,6 +15,11 @@ export default function ExportScreen() {
   const currency = useSettingsStore((state) => state.settings.currency);
   const reload = useTransactionStore((state) => state.load);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!busy) return;
+    return beginCriticalWork('csv-import-export');
+  }, [busy]);
 
   return (
     <Screen scroll>

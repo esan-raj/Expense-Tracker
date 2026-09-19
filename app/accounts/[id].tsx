@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { Card } from '@/components/ui/Card';
@@ -12,13 +12,14 @@ import { Amount } from '@/components/ui/Amount';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
-import { accountOverviewSlices, isLiabilityAccount } from '@/utils/accountLogic';
+import { accountOverviewSlices, isCashHolding, isLiabilityAccount } from '@/utils/accountLogic';
 import { toUserMessage } from '@/utils/errors';
 import { useTheme } from '@/hooks/useTheme';
 import { transactionService } from '@/services/transactionService';
 import { useTransactionStore } from '@/store/useTransactionStore';
 import { TransactionRow } from '@/components/transactions/TransactionRow';
 import { SectionHeader } from '@/components/ui/SectionHeader';
+import { radius } from '@/constants/theme';
 import type { AccountWithBalances, TransactionWithCategory } from '@/types';
 
 export default function AccountDetailScreen() {
@@ -37,6 +38,10 @@ export default function AccountDetailScreen() {
   const [activity, setActivity] = useState<TransactionWithCategory[]>([]);
   const setQuery = useTransactionStore((state) => state.setQuery);
 
+  const openTransaction = useCallback((item: TransactionWithCategory) => {
+    router.push(`/transaction/${item.id}`);
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -44,7 +49,7 @@ export default function AccountDetailScreen() {
   useEffect(() => {
     if (!id) return;
     void transactionService
-      .query({ filters: { accountId: id }, sort: 'newest', limit: 8, offset: 0 })
+      .query({ filters: { accountId: id }, sort: 'newest', limit: 40, offset: 0 })
       .then(setActivity);
   }, [id]);
 
@@ -53,6 +58,7 @@ export default function AccountDetailScreen() {
   if (!item) return <ErrorState message="This account could not be found." />;
 
   const liability = isLiabilityAccount(item.type);
+  const cash = isCashHolding(item.type);
   const slices = accountOverviewSlices(item, item.expenditure);
 
   return (
@@ -88,17 +94,33 @@ export default function AccountDetailScreen() {
           </View>
         ) : (
           <>
-            <Text style={[styles.label, { color: colors.textSecondary }]}>Current balance</Text>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>{cash ? 'Cash on hand' : 'Current balance'}</Text>
             <Amount minor={item.currentBalance} currency={currency} size="hero" />
           </>
         )}
         {!item.isActive ? <Text style={{ color: colors.textSecondary, marginTop: 8 }}>Archived — hidden from new transactions.</Text> : null}
       </Card>
+      {item.isActive ? (
+        <View style={styles.actions}>
+          <ActionChip
+            label={cash ? 'Cash expense' : 'Add expense'}
+            onPress={() => router.push({ pathname: '/transaction/add', params: { accountId: item.id, type: 'expense' } })}
+          />
+          <ActionChip
+            label={cash ? 'Cash income' : 'Add income'}
+            onPress={() => router.push({ pathname: '/transaction/add', params: { accountId: item.id, type: 'income' } })}
+          />
+          <ActionChip
+            label={cash ? 'Withdraw / deposit' : 'Transfer'}
+            onPress={() => router.push({ pathname: '/transaction/add', params: { accountId: item.id, type: 'transfer' } })}
+          />
+        </View>
+      ) : null}
       {activity.length > 0 ? (
         <Card>
-          <SectionHeader title="Recent activity" />
+          <SectionHeader title={cash ? 'Cash history' : 'Recent activity'} />
           {activity.map((entry) => (
-            <TransactionRow key={entry.id} item={entry} onPress={() => router.push(`/transaction/${entry.id}`)} />
+            <TransactionRow key={entry.id} item={entry} onPress={openTransaction} />
           ))}
           <Button
             title="View all activity"
@@ -112,7 +134,9 @@ export default function AccountDetailScreen() {
       ) : (
         <Card>
           <Text style={{ color: colors.textSecondary }}>
-            No transactions on this account yet. Older transactions stay unassigned until you edit them.
+            {cash
+              ? 'No cash movement yet. Record an expense, income, or transfer to start this wallet’s history.'
+              : 'No transactions on this account yet. Older transactions stay unassigned until you edit them.'}
           </Text>
         </Card>
       )}
@@ -169,6 +193,20 @@ export default function AccountDetailScreen() {
   );
 }
 
+function ActionChip({ label, onPress }: { label: string; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.border }]}
+    >
+      <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function Stat({ label, value, currency }: { label: string; value: number; currency: AccountWithBalances['currency'] }) {
   const { colors } = useTheme();
   return (
@@ -185,4 +223,6 @@ const styles = StyleSheet.create({
   stats: { width: '100%', gap: 10, marginTop: 8 },
   stat: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   statValue: { fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { minHeight: 40, paddingHorizontal: 12, borderRadius: radius.full, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

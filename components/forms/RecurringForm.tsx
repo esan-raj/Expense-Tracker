@@ -1,23 +1,29 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { StyleSheet, View } from 'react-native';
+import { router } from 'expo-router';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
 import { Input } from '@/components/ui/Input';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useCategoryStore } from '@/store/useCategoryStore';
 import { useAccountStore } from '@/store/useAccountStore';
 import { accountTypeLabel } from '@/utils/accountLogic';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { categoryService } from '@/services/categoryService';
+import { normalizeOptionLabel } from '@/utils/optionLabel';
+import { AppError } from '@/utils/errors';
 import { FREQUENCIES, PAYMENT_METHODS } from '@/utils/constants';
 import { recurringFormSchema, type RecurringFormValues } from '@/utils/validation';
 import { fromMinorUnits, parseAmountInput, toMinorUnits } from '@/utils/currency';
 import { getCurrency } from '@/constants/currencies';
 import { todayKey } from '@/utils/dates';
 import type { RecurringTransaction } from '@/types';
+import { useCriticalWork } from '@/hooks/useCriticalWork';
 
 interface RecurringFormProps {
   initial?: RecurringTransaction;
@@ -26,8 +32,12 @@ interface RecurringFormProps {
 }
 
 export function RecurringForm({ initial, submitting, onSubmit }: RecurringFormProps) {
+  useCriticalWork('recurring-form');
   const categories = useCategoryStore((state) => state.categories);
+  const loadCategories = useCategoryStore((state) => state.load);
   const accounts = useAccountStore((state) => state.accounts);
+  const lastUsedId = useAccountStore((state) => state.lastUsedId);
+  const loadAccounts = useAccountStore((state) => state.load);
   const currency = useSettingsStore((state) => getCurrency(state.settings.currency));
   const form = useForm<RecurringFormValues>({
     resolver: zodResolver(recurringFormSchema),
@@ -43,6 +53,20 @@ export function RecurringForm({ initial, submitting, onSubmit }: RecurringFormPr
     },
   });
   const type = form.watch('type');
+
+  const sawLastUsed = useRef(lastUsedId);
+
+  useEffect(() => {
+    void loadAccounts();
+    void loadCategories();
+  }, [loadAccounts, loadCategories]);
+
+  useEffect(() => {
+    if (!lastUsedId || lastUsedId === sawLastUsed.current) return;
+    sawLastUsed.current = lastUsedId;
+    form.setValue('accountId', lastUsedId);
+  }, [form, lastUsedId]);
+
   const categoryOptions = useMemo(
     () =>
       categories
@@ -89,14 +113,34 @@ export function RecurringForm({ initial, submitting, onSubmit }: RecurringFormPr
         control={form.control}
         name="categoryId"
         render={({ field, fieldState }) => (
-          <Select label="Category" value={field.value} options={categoryOptions} onChange={field.onChange} error={fieldState.error?.message} />
+          <SearchableSelect
+            label="Category"
+            value={field.value}
+            options={categoryOptions}
+            onChange={field.onChange}
+            error={fieldState.error?.message}
+            allowCreate
+            onCreate={async (name) => {
+              if (normalizeOptionLabel(name) === 'transfer') {
+                throw new AppError('Transfer is reserved for account movements.');
+              }
+              const created = await categoryService.createOrFind({
+                name,
+                icon: type === 'income' ? 'cash' : 'ellipse',
+                color: type === 'income' ? '#059669' : '#64748B',
+                type,
+              });
+              await loadCategories();
+              return created.id;
+            }}
+          />
         )}
       />
       <Controller
         control={form.control}
         name="accountId"
         render={({ field }) => (
-          <Select
+          <SearchableSelect
             label="Account"
             value={field.value ?? ''}
             placeholder="No account"
@@ -107,6 +151,10 @@ export function RecurringForm({ initial, submitting, onSubmit }: RecurringFormPr
                 label: `${item.name} · ${accountTypeLabel(item.type)}`,
               }))}
             onChange={field.onChange}
+            actions={[
+              { label: 'Add account', onPress: () => router.push('/accounts/add') },
+              { label: 'Add cash wallet', onPress: () => router.push({ pathname: '/accounts/add', params: { type: 'cash' } }) },
+            ]}
           />
         )}
       />

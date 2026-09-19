@@ -3,6 +3,7 @@ import { compareValues } from '@/database/helpers';
 import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
 import type { Category, CategoryInput, CategoryType } from '@/types';
 import { categoryIdentityKey } from '@/utils/categoryDedupe';
+import { displayOptionLabel } from '@/utils/optionLabel';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
 import { mapCategory } from './mappers';
@@ -47,7 +48,7 @@ export const categoryRepository = {
     const timestamp = nowIso();
     await db.categories.insert({
       id,
-      name: input.name.trim(),
+      name: displayOptionLabel(input.name),
       icon: input.icon,
       color: input.color,
       type: input.type,
@@ -69,7 +70,7 @@ export const categoryRepository = {
     const row = await db.categories.findOne(id).exec();
     if (!row) throw new Error('Category not found');
     await row.incrementalPatch({
-      name: input.name.trim(),
+      name: displayOptionLabel(input.name),
       icon: input.icon,
       color: input.color,
       type: input.type,

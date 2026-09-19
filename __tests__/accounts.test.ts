@@ -195,6 +195,7 @@ describe('bank and card balances', () => {
       },
     ]);
     expect(summary.bankBalance).toBe(4525000);
+    expect(summary.cashBalance).toBe(0);
     expect(summary.creditOutstanding).toBe(740000);
     expect(summary.availableCredit).toBe(4260000);
   });

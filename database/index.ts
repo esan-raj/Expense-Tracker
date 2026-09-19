@@ -14,3 +14,9 @@ export async function getStore(): Promise<SpendWiseDatabase> {
 export const getDatabase = getStore;
 export { getRxDatabase, resetDatabaseConnection, resetSpendWiseDatabase };
 export type { SpendWiseDatabase } from './types';
+
+export async function flushPersistentStorage(): Promise<void> {
+  if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID) return;
+  const storage = await import('./storage');
+  await storage.flushPersistentStorage();
+}

@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Screen } from '@/components/ui/Screen';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { authService } from '@/services/authService';
 import { useTheme } from '@/hooks/useTheme';
 import { forgotPasswordSchema } from '@/utils/validation';
@@ -24,7 +25,7 @@ export default function ForgotPasswordScreen() {
   return (
     <Screen scroll>
       <View style={styles.hero}>
-        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <BrandLockup size={48} />
         <Text style={[styles.title, { color: colors.textPrimary }]}>Reset password</Text>
         <Text style={[styles.copy, { color: colors.textSecondary }]}>
           Enter your email and we will send a reset link. You can keep using SpendWise offline in the meantime.
@@ -64,8 +65,7 @@ export default function ForgotPasswordScreen() {
 }
 
 const styles = StyleSheet.create({
-  hero: { marginBottom: 20, gap: 6 },
-  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  hero: { marginBottom: 20, gap: 12 },
   title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
   copy: { fontSize: 15, lineHeight: 22 },
 });

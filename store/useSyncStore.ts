@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import NetInfo from '@react-native-community/netinfo';
 import { syncService, subscribeSyncStatus } from '@/services/syncService';
 import { syncQueueRepository, syncStateRepository } from '@/database/repositories/syncQueueRepository';
+import { getCurrentUserId } from '@/database/session';
 import type { SyncStatus } from '@/types/sync';
 
 interface SyncStoreState {
@@ -35,7 +36,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     NetInfo.addEventListener((next) => {
       const online = Boolean(next.isConnected && next.isInternetReachable !== false);
       set({ isOnline: online, status: online ? get().status : 'offline' });
-      if (online) {
+      if (online && getCurrentUserId()) {
         void get().syncNow();
       }
     });

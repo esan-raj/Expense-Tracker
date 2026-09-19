@@ -1,17 +1,22 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { StyleSheet, View } from 'react-native';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
 import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { Button } from '@/components/ui/Button';
 import { useCategoryStore } from '@/store/useCategoryStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { categoryService } from '@/services/categoryService';
+import { normalizeOptionLabel } from '@/utils/optionLabel';
+import { AppError } from '@/utils/errors';
 import { budgetFormSchema, type BudgetFormValues } from '@/utils/validation';
 import { fromMinorUnits, parseAmountInput, toMinorUnits } from '@/utils/currency';
 import { getCurrency } from '@/constants/currencies';
 import { currentMonthYear } from '@/utils/dates';
 import type { Budget } from '@/types';
+import { useCriticalWork } from '@/hooks/useCriticalWork';
 
 interface BudgetFormProps {
   initial?: Budget;
@@ -20,7 +25,9 @@ interface BudgetFormProps {
 }
 
 export function BudgetForm({ initial, submitting, onSubmit }: BudgetFormProps) {
+  useCriticalWork('budget-form');
   const categories = useCategoryStore((state) => state.categories);
+  const loadCategories = useCategoryStore((state) => state.load);
   const currency = useSettingsStore((state) => getCurrency(state.settings.currency));
   const period = currentMonthYear();
   const form = useForm<BudgetFormValues>({
@@ -32,6 +39,10 @@ export function BudgetForm({ initial, submitting, onSubmit }: BudgetFormProps) {
       year: initial?.year ?? period.year,
     },
   });
+
+  useEffect(() => {
+    void loadCategories();
+  }, [loadCategories]);
 
   const categoryOptions = useMemo(
     () => [
@@ -58,11 +69,25 @@ export function BudgetForm({ initial, submitting, onSubmit }: BudgetFormProps) {
         control={form.control}
         name="categoryId"
         render={({ field }) => (
-          <Select
+          <SearchableSelect
             label="Category"
             value={field.value ?? 'overall'}
             options={categoryOptions}
             onChange={(value) => field.onChange(value === 'overall' ? null : value)}
+            allowCreate
+            onCreate={async (name) => {
+              if (normalizeOptionLabel(name) === 'transfer' || normalizeOptionLabel(name) === 'overall monthly budget') {
+                throw new AppError('Choose a different category name.');
+              }
+              const created = await categoryService.createOrFind({
+                name,
+                icon: 'ellipse',
+                color: '#64748B',
+                type: 'expense',
+              });
+              await loadCategories();
+              return created.id;
+            }}
           />
         )}
       />

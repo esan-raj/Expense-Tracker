@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { TransactionForm } from '@/components/forms/TransactionForm';
 import { useTransactionStore } from '@/store/useTransactionStore';
@@ -17,11 +17,19 @@ export default function AddTransactionScreen() {
   const loadBudgets = useBudgetStore((state) => state.load);
   const [submitting, setSubmitting] = useState(false);
   const isOnline = useSyncStore((state) => state.isOnline);
+  const params = useLocalSearchParams<{ accountId?: string; type?: string; destAccountId?: string }>();
+  const entryType = params.type === 'income' || params.type === 'transfer' || params.type === 'expense' ? params.type : undefined;
 
   return (
     <Screen scroll>
       <TransactionForm
         submitting={submitting}
+        defaults={{
+          accountId: params.accountId,
+          entryType,
+          sourceAccountId: entryType === 'transfer' ? params.accountId : undefined,
+          destinationAccountId: entryType === 'transfer' ? params.destAccountId : undefined,
+        }}
         onSubmit={async (values) => {
           setSubmitting(true);
           try {

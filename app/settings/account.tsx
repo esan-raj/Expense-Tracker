@@ -13,7 +13,11 @@ export default function AccountScreen() {
   const { colors } = useTheme();
   const user = useAuthStore((state) => state.user);
   const signOut = useAuthStore((state) => state.signOut);
-  const { status, lastSyncedAt, isOnline, pendingCount, syncNow } = useSyncStore();
+  const status = useSyncStore((state) => state.status);
+  const lastSyncedAt = useSyncStore((state) => state.lastSyncedAt);
+  const isOnline = useSyncStore((state) => state.isOnline);
+  const pendingCount = useSyncStore((state) => state.pendingCount);
+  const syncNow = useSyncStore((state) => state.syncNow);
 
   const syncLabel = !user
     ? 'Not signed in'

@@ -11,7 +11,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ScreenSkeleton } from '@/components/ui/Skeleton';
 import { DatePicker } from '@/components/ui/DatePicker';
-import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { ChipRow } from '@/components/ui/Chip';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useTheme } from '@/hooks/useTheme';
@@ -19,6 +19,7 @@ import { useReports } from '@/hooks/useReports';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { formatMoney } from '@/utils/currency';
+import { accountTypeLabel, isBankHolding, isCashHolding, isLiabilityAccount } from '@/utils/accountLogic';
 import { formatDisplayDate, toDateKey } from '@/utils/dates';
 import { spacing } from '@/constants/theme';
 import type { DateRangePreset } from '@/utils/dates';
@@ -60,10 +61,16 @@ export default function ReportsScreen() {
               { value: 'accounts', label: 'Accounts' },
             ]}
           />
-          <Select
+          <SearchableSelect
             label="Account"
             value={accountId ?? 'all'}
-            options={[{ value: 'all', label: 'All accounts' }, ...accounts.map((item) => ({ value: item.id, label: item.name }))]}
+            options={[
+              { value: 'all', label: 'All accounts' },
+              ...accounts.map((item) => ({
+                value: item.id,
+                label: `${item.name} · ${accountTypeLabel(item.type)}`,
+              })),
+            ]}
             onChange={(value) => setAccountId(value === 'all' ? undefined : value)}
           />
           {preset === 'custom' ? (
@@ -156,22 +163,56 @@ export default function ReportsScreen() {
               </Card>
             ) : null}
             {tab === 'accounts' ? (
-              <Card>
-                <Text style={[styles.section, { color: colors.textPrimary }]}>Expenses by account</Text>
-                {data.accountExpenses.length === 0 ? (
-                  <Text style={{ color: colors.textSecondary }}>No account-level spending in this range.</Text>
-                ) : (
-                  data.accountExpenses.map((item) => (
-                    <View key={item.accountId} style={styles.legend}>
-                      <Text style={[styles.flex, { color: colors.textPrimary }]}>{item.accountName}</Text>
-                      <Text style={{ color: colors.textSecondary }}>{formatMoney(item.amount, currency)}</Text>
-                    </View>
-                  ))
-                )}
-                <Text style={{ color: colors.textSecondary, marginTop: 8 }}>
-                  Transfers between accounts are not counted as spending.
-                </Text>
-              </Card>
+              <>
+                <Card>
+                  <Text style={[styles.section, { color: colors.textPrimary }]}>Holdings</Text>
+                  <View style={styles.legend}>
+                    <Text style={[styles.flex, { color: colors.textPrimary }]}>Bank</Text>
+                    <Text style={{ color: colors.textSecondary }}>
+                      {formatMoney(
+                        accounts.filter((item) => isBankHolding(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
+                        currency
+                      )}
+                    </Text>
+                  </View>
+                  <View style={styles.legend}>
+                    <Text style={[styles.flex, { color: colors.textPrimary }]}>Cash</Text>
+                    <Text style={{ color: colors.textSecondary }}>
+                      {formatMoney(
+                        accounts.filter((item) => isCashHolding(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
+                        currency
+                      )}
+                    </Text>
+                  </View>
+                  <View style={styles.legend}>
+                    <Text style={[styles.flex, { color: colors.textPrimary }]}>Credit available</Text>
+                    <Text style={{ color: colors.textSecondary }}>
+                      {formatMoney(
+                        accounts
+                          .filter((item) => isLiabilityAccount(item.type))
+                          .reduce((sum, item) => sum + (item.availableCredit ?? 0), 0),
+                        currency
+                      )}
+                    </Text>
+                  </View>
+                </Card>
+                <Card>
+                  <Text style={[styles.section, { color: colors.textPrimary }]}>Expenses by account</Text>
+                  {data.accountExpenses.length === 0 ? (
+                    <Text style={{ color: colors.textSecondary }}>No account-level spending in this range.</Text>
+                  ) : (
+                    data.accountExpenses.map((item) => (
+                      <View key={item.accountId} style={styles.legend}>
+                        <Text style={[styles.flex, { color: colors.textPrimary }]}>{item.accountName}</Text>
+                        <Text style={{ color: colors.textSecondary }}>{formatMoney(item.amount, currency)}</Text>
+                      </View>
+                    ))
+                  )}
+                  <Text style={{ color: colors.textSecondary, marginTop: 8 }}>
+                    Transfers between accounts are not counted as spending.
+                  </Text>
+                </Card>
+              </>
             ) : null}
           </View>
         ) : null}

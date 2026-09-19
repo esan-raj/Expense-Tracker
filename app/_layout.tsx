@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -14,10 +14,13 @@ import { useInvestmentStore } from '@/store/useInvestmentStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSyncStore } from '@/store/useSyncStore';
 import { useTheme } from '@/hooks/useTheme';
+import { bumpFinanceRevision } from '@/services/financeRevision';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { DesktopSidebar } from '@/components/layout/DesktopSidebar';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { ErrorState } from '@/components/ui/ErrorState';
+import { UpdateReadyBar } from '@/components/updates/UpdateReadyBar';
+import { appUpdateController } from '@/services/appUpdate';
 import { toUserMessage } from '@/utils/errors';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -33,6 +36,14 @@ export default function RootLayout() {
   const hydrateSync = useSyncStore((state) => state.hydrate);
   const user = useAuthStore((state) => state.user);
   const syncNow = useSyncStore((state) => state.syncNow);
+  const seenUserIdRef = useRef<string | null | undefined>(undefined);
+  const splashHiddenRef = useRef(false);
+
+  const hideSplash = () => {
+    if (splashHiddenRef.current) return;
+    splashHiddenRef.current = true;
+    void SplashScreen.hideAsync().catch(() => undefined);
+  };
 
   const bootstrap = async () => {
     setError(null);
@@ -45,6 +56,7 @@ export default function RootLayout() {
       const currentUser = useAuthStore.getState().user;
       if (currentUser) {
         void syncService.startRealtime(currentUser.id, () => {
+          bumpFinanceRevision();
           void loadCategories();
           void loadAccounts();
           void loadInvestments();
@@ -53,8 +65,6 @@ export default function RootLayout() {
       }
     } catch (err) {
       setError(toUserMessage(err, 'SpendWise could not start. Please try again.'));
-    } finally {
-      await SplashScreen.hideAsync();
     }
   };
 
@@ -66,17 +76,33 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (ready || error) hideSplash();
+  }, [ready, error]);
+
+  useEffect(() => {
     if (!ready) return;
-    void loadCategories();
-    void loadAccounts();
-    void loadInvestments();
-    if (user) {
-      void syncService.startRealtime(user.id, () => {
+    if (!user) {
+      syncService.stopRealtime();
+      if (seenUserIdRef.current) {
         void loadCategories();
         void loadAccounts();
         void loadInvestments();
-      });
+      }
+      seenUserIdRef.current = null;
+      return;
     }
+    void syncService.startRealtime(user.id, () => {
+      bumpFinanceRevision();
+      void loadCategories();
+      void loadAccounts();
+      void loadInvestments();
+    });
+    if (seenUserIdRef.current !== undefined && seenUserIdRef.current !== user.id) {
+      void loadCategories();
+      void loadAccounts();
+      void loadInvestments();
+    }
+    seenUserIdRef.current = user.id;
   }, [ready, user, loadCategories, loadAccounts, loadInvestments]);
 
   if (error) {
@@ -84,7 +110,7 @@ export default function RootLayout() {
   }
 
   if (!ready) {
-    return <LoadingState message="Preparing your finances…" />;
+    return <LoadingState message="Preparing your finances…" onReady={hideSplash} />;
   }
 
   return <RootNavigation />;
@@ -94,6 +120,10 @@ function RootNavigation() {
   const { colors, isDark } = useTheme();
   const { isDesktop } = useBreakpoint();
   const pathname = usePathname();
+
+  useEffect(() => {
+    void appUpdateController.check('launch');
+  }, []);
   const hideSidebar =
     ['/welcome', '/login', '/signup', '/forgot-password', '/onboarding', '/reset-password'].some(
       (path) => pathname === path || pathname.startsWith(`${path}/`)
@@ -128,6 +158,7 @@ function RootNavigation() {
   return (
     <SafeAreaProvider style={styles.root}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      <UpdateReadyBar />
       {showSidebar ? (
         <View style={[styles.shell, { backgroundColor: colors.background }]}>
           <DesktopSidebar />

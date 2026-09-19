@@ -10,7 +10,7 @@ import type { TransactionWithCategory } from '@/types';
 
 interface TransactionRowProps {
   item: TransactionWithCategory;
-  onPress: () => void;
+  onPress: (item: TransactionWithCategory) => void;
 }
 
 function TransactionRowComponent({ item, onPress }: TransactionRowProps) {
@@ -24,7 +24,7 @@ function TransactionRowComponent({ item, onPress }: TransactionRowProps) {
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => onPress(item)}
       accessibilityRole="button"
       accessibilityLabel={`${item.title}, ${transfer ? 'transfer' : item.type} ${amountLabel}`}
       style={({ pressed }) => [styles.row, { opacity: pressed ? 0.72 : 1 }]}

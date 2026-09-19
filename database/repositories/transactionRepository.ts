@@ -3,14 +3,51 @@ import { compareValues, enrichTransaction, loadLookups, matchesSearch } from '@/
 import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
 import type {
   Transaction,
+  TransactionFilters,
   TransactionInput,
   TransactionQuery,
   TransactionWithCategory,
 } from '@/types';
+import type { AccountLedgerEntry } from '@/utils/accountLogic';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
 import { mapTransaction, mapTransactionWithCategory } from './mappers';
 import type { TransactionDoc } from '@/database/types';
+
+export type TransactionLedgerEntry = AccountLedgerEntry & { date: string };
+
+export function transactionSelector(filters: TransactionFilters = {}, options: { includeTransfers?: boolean } = {}): Record<string, unknown> {
+  const selector: Record<string, unknown> = { ...scopeSelector() };
+
+  if (filters.accountId) selector.accountId = filters.accountId;
+  if (filters.categoryId) selector.categoryId = filters.categoryId;
+  else if (filters.categoryIds?.length) selector.categoryId = { $in: filters.categoryIds };
+  if (filters.paymentMethod) selector.paymentMethod = filters.paymentMethod;
+
+  if (filters.isTransfer === true) selector.isTransfer = true;
+  else if (filters.isTransfer === false) selector.isTransfer = false;
+
+  if (filters.type && filters.type !== 'all') {
+    selector.type = filters.type;
+    if (filters.isTransfer == null) selector.isTransfer = false;
+  }
+
+  if (options.includeTransfers === false && filters.isTransfer == null && (!filters.type || filters.type === 'all')) {
+    selector.isTransfer = false;
+  }
+
+  const date: Record<string, string> = {};
+  if (filters.startDate) date.$gte = filters.startDate;
+  if (filters.endDate) date.$lte = filters.endDate;
+  if (Object.keys(date).length) selector.date = date;
+
+  const amount: Record<string, number> = {};
+  if (filters.minAmount !== undefined) amount.$gte = filters.minAmount;
+  if (filters.maxAmount !== undefined) amount.$lte = filters.maxAmount;
+  if (Object.keys(amount).length) selector.amount = amount;
+
+  return selector;
+}
 
 function matchesQuery(row: TransactionDoc, query: TransactionQuery, categoryName?: string): boolean {
   const filters = query.filters ?? {};
@@ -108,7 +145,8 @@ export const transactionRepository = {
   async query(query: TransactionQuery = {}): Promise<TransactionWithCategory[]> {
     const db = await getRxDatabase();
     const lookups = await loadLookups(db);
-    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
+    const selector = transactionSelector(query.filters);
+    const rows = await db.transactions.find({ selector }).exec();
     const filtered = rows
       .map((row) => row.toMutableJSON())
       .filter((row) =>
@@ -123,13 +161,41 @@ export const transactionRepository = {
 
   async count(query: TransactionQuery = {}): Promise<number> {
     const db = await getRxDatabase();
+    const search = query.filters?.search?.trim();
+    const selector = transactionSelector(query.filters);
+    if (!search) {
+      return db.transactions.count({ selector }).exec();
+    }
     const lookups = await loadLookups(db);
-    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
+    const rows = await db.transactions.find({ selector }).exec();
     return rows
       .map((row) => row.toMutableJSON())
       .filter((row) =>
         matchesQuery(row, query, lookups.categories.find((item) => item.id === row.categoryId)?.name)
       ).length;
+  },
+
+  async listScopedDocs(): Promise<TransactionDoc[]> {
+    const db = await getRxDatabase();
+    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
+    return rows.map((row) => row.toMutableJSON());
+  },
+
+  async listLedgerEntries(accountId?: string): Promise<TransactionLedgerEntry[]> {
+    const db = await getRxDatabase();
+    const selector = transactionSelector(accountId ? { accountId } : {});
+    const rows = await db.transactions.find({ selector }).exec();
+    return rows.map((row) => {
+      const json = row.toMutableJSON();
+      return {
+        type: json.type as TransactionLedgerEntry['type'],
+        amount: json.amount,
+        accountId: json.accountId || null,
+        isTransfer: json.isTransfer,
+        transferRole: (json.transferRole || null) as TransactionLedgerEntry['transferRole'],
+        date: json.date,
+      };
+    });
   },
 
   async listBetween(startDate: string, endDate: string): Promise<TransactionWithCategory[]> {
@@ -159,23 +225,20 @@ export const transactionRepository = {
 
   async totals(startDate?: string, endDate?: string): Promise<{ income: number; expenses: number }> {
     const db = await getRxDatabase();
-    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
-    return rows
-      .map((row) => row.toMutableJSON())
-      .filter((row) => {
-        if (row.isTransfer) return false;
-        if (startDate && row.date < startDate) return false;
-        if (endDate && row.date > endDate) return false;
-        return true;
-      })
-      .reduce(
-        (acc, row) => {
-          if (row.type === 'income') acc.income += row.amount;
-          if (row.type === 'expense') acc.expenses += row.amount;
-          return acc;
-        },
-        { income: 0, expenses: 0 }
-      );
+    const selector = transactionSelector({ startDate, endDate }, { includeTransfers: false });
+    const rows = await db.transactions.find({ selector }).exec();
+    return rows.reduce(
+      (acc, doc) => {
+        const row = doc.toMutableJSON();
+        if (row.isTransfer) return acc;
+        if (startDate && row.date < startDate) return acc;
+        if (endDate && row.date > endDate) return acc;
+        if (row.type === 'income') acc.income += row.amount;
+        if (row.type === 'expense') acc.expenses += row.amount;
+        return acc;
+      },
+      { income: 0, expenses: 0 }
+    );
   },
 
   async categoryTotals(
@@ -185,7 +248,8 @@ export const transactionRepository = {
   ): Promise<{ categoryId: string; name: string; icon: string; color: string; amount: number }[]> {
     const db = await getRxDatabase();
     const lookups = await loadLookups(db);
-    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
+    const selector = transactionSelector({ type, startDate, endDate, isTransfer: false });
+    const rows = await db.transactions.find({ selector }).exec();
     const totals = new Map<string, { categoryId: string; name: string; icon: string; color: string; amount: number }>();
     for (const doc of rows) {
       const row = doc.toMutableJSON();
@@ -211,7 +275,8 @@ export const transactionRepository = {
     endDate: string
   ): Promise<{ date: string; amount: number }[]> {
     const db = await getRxDatabase();
-    const rows = await db.transactions.find({ selector: scopeSelector() }).exec();
+    const selector = transactionSelector({ type, startDate, endDate, isTransfer: false });
+    const rows = await db.transactions.find({ selector }).exec();
     const totals = new Map<string, number>();
     for (const doc of rows) {
       const row = doc.toMutableJSON();
@@ -224,7 +289,8 @@ export const transactionRepository = {
   async highestExpense(startDate: string, endDate: string): Promise<TransactionWithCategory | null> {
     const db = await getRxDatabase();
     const lookups = await loadLookups(db);
-    const rows = await db.transactions.find({ selector: { ...scopeSelector(), type: 'expense' } }).exec();
+    const selector = transactionSelector({ type: 'expense', startDate, endDate, isTransfer: false });
+    const rows = await db.transactions.find({ selector }).exec();
     const best = sortTransactions(
       rows
         .map((row) => row.toMutableJSON())

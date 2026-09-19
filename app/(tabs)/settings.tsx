@@ -8,9 +8,17 @@ import { SyncStatusBar } from '@/components/ui/SyncStatusBar';
 import { useTheme } from '@/hooks/useTheme';
 import { spacing } from '@/constants/theme';
 import { APP_VERSION } from '@/utils/constants';
+import { useAppUpdateStore } from '@/services/appUpdate';
 
 export default function SettingsScreen() {
   const { colors } = useTheme();
+  const updateStatus = useAppUpdateStore((state) => state.status);
+  const updateSubtitle =
+    updateStatus === 'ready'
+      ? 'Update ready to restart'
+      : updateStatus === 'checking' || updateStatus === 'downloading'
+        ? 'Checking for a compatible update'
+        : `Version ${APP_VERSION}`;
   return (
     <Screen padded={false}>
       <PageScroll style={styles.scroller} contentContainerStyle={styles.content}>
@@ -32,6 +40,7 @@ export default function SettingsScreen() {
         </SettingsGroup>
 
         <SettingsGroup title="About">
+          <SettingsRow icon="cloud-download-outline" title="App updates" subtitle={updateSubtitle} onPress={() => router.push('/settings/updates' as never)} />
           <SettingsRow icon="information-circle-outline" title="About" subtitle={`Version ${APP_VERSION}`} onPress={() => router.push('/settings/about')} />
           <SettingsRow icon="shield-checkmark-outline" title="Privacy" subtitle="Your data stays on this device" onPress={() => router.push('/settings/privacy')} last />
         </SettingsGroup>

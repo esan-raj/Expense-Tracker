@@ -22,6 +22,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   hydrate: async () => {
     const session = await authService.getSession();
     const user = session?.user ?? null;
+    console.info('[supabase][auth] session restored:', Boolean(session));
+    console.info('[supabase][auth] user authenticated:', Boolean(user));
     if (user) {
       setCurrentUserId(user.id);
     } else {

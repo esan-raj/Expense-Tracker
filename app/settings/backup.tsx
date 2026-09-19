@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text } from 'react-native';
 import { Screen } from '@/components/ui/Screen';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +12,7 @@ import { useCategoryStore } from '@/store/useCategoryStore';
 import { useTransactionStore } from '@/store/useTransactionStore';
 import { useBudgetStore } from '@/store/useBudgetStore';
 import { useAccountStore } from '@/store/useAccountStore';
+import { beginCriticalWork } from '@/store/useCriticalWorkStore';
 import { toUserMessage } from '@/utils/errors';
 import type { BackupPayload } from '@/utils/validation';
 
@@ -25,6 +26,11 @@ export default function BackupScreen() {
   const [payload, setPayload] = useState<BackupPayload | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!payload && !busy && !clearOpen) return;
+    return beginCriticalWork('backup-restore');
+  }, [payload, busy, clearOpen]);
 
   const refreshAll = async () => {
     await Promise.all([reloadSettings(), reloadCategories(), reloadAccounts(), reloadTransactions(), reloadBudgets()]);

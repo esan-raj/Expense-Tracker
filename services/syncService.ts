@@ -15,12 +15,27 @@ import { resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogi
 import { logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
 import type { SyncStatus } from '@/types/sync';
+import { bumpFinanceRevision } from '@/services/financeRevision';
+import { syncGate } from '@/services/syncSingleFlight';
 
 let realtimeChannel: RealtimeChannel | null = null;
 let listeners: Array<(status: SyncStatus, lastSyncedAt: string | null, pending: number) => void> = [];
 
 function emit(status: SyncStatus, lastSyncedAt: string | null, pending: number) {
   listeners.forEach((listener) => listener(status, lastSyncedAt, pending));
+}
+
+function shortUserId(userId: string): string {
+  return `${userId.slice(0, 8)}…`;
+}
+
+function syncLog(message: string): void {
+  console.info(`[sync] ${message}`);
+}
+
+function syncEntityLog(entity: string, direction: 'push' | 'pull', message: string): void {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+  console.info(`[sync][${entity}][${direction}] ${message}`);
 }
 
 export function subscribeSyncStatus(
@@ -70,6 +85,7 @@ async function applyRemoteRecord(
   if (entity === 'recurring') await recurringRepository.upsertFromRemote(remote as never);
   if (entity === 'account') await accountRepository.upsertFromRemote(remote as never);
   if (entity === 'investment') await investmentRepository.upsertFromRemote(remote as never);
+  bumpFinanceRevision();
 }
 
 export const syncService = {
@@ -115,8 +131,10 @@ export const syncService = {
   async pushLocalChanges(): Promise<void> {
     if (!isSupabaseConfigured() || !getCurrentUserId()) return;
     const queue = sortQueueForPush(await syncQueueRepository.list());
+    syncLog('starting push');
     for (const item of queue) {
       try {
+        syncEntityLog(item.entityType, 'push', item.operation);
         const payload = JSON.parse(item.payload) as { id?: string; deletedAt?: string };
         if (item.operation === 'delete') {
           const deletedAt = payload.deletedAt ?? nowIso();
@@ -136,6 +154,7 @@ export const syncService = {
           if (item.entityType === 'profile') await remoteApi.upsertProfile(payload as never);
         }
         await syncQueueRepository.remove(item.id);
+        syncEntityLog(item.entityType, 'push', 'complete');
       } catch (error) {
         logError(`sync[${item.entityType}][${item.operation}]`, error);
         const nextRetry = item.retryCount + 1;
@@ -149,56 +168,11 @@ export const syncService = {
         }
       }
     }
+    syncLog('push complete');
   },
 
   async pullRemoteChanges(): Promise<void> {
-    if (!isSupabaseConfigured() || !getCurrentUserId()) return;
-    const state = await syncStateRepository.get();
-    const since = state.lastSyncedAt;
-    const [transactions, categories, budgets, recurring, accounts, investments, profile] = await Promise.all([
-      remoteApi.pullTransactions(since),
-      remoteApi.pullCategories(since),
-      remoteApi.pullBudgets(since),
-      remoteApi.pullRecurring(since),
-      remoteApi.pullAccounts(since),
-      remoteApi.pullInvestments(since),
-      remoteApi.pullProfile(),
-    ]);
-
-    for (const item of accounts) await applyRemoteRecord('account', item);
-    for (const item of investments) await applyRemoteRecord('investment', item);
-    for (const item of categories) await applyRemoteRecord('category', item);
-    for (const item of recurring) await applyRemoteRecord('recurring', item);
-    for (const item of transactions) await applyRemoteRecord('transaction', item);
-    for (const item of budgets) await applyRemoteRecord('budget', item);
-
-    if (categories.length > 0) {
-      const keep = new Set(categories.map((item) => item.id));
-      const local = await categoryRepository.list();
-      for (const category of local) {
-        if (!category.isDefault || keep.has(category.id)) continue;
-        const [usedByTransactions, usedByRecurring] = await Promise.all([
-          transactionRepository.countByCategory(category.id),
-          recurringRepository.countByCategory(category.id),
-        ]);
-        if (usedByTransactions + usedByRecurring === 0) {
-          await categoryRepository.hide(category.id);
-        }
-      }
-      const { categoryDedupeService } = await import('@/services/categoryDedupeService');
-      await categoryDedupeService.apply();
-    }
-
-    if (profile) {
-      await settingsRepository.update({
-        currency: profile.currency,
-        currencySymbol: profile.currency_symbol,
-        theme: profile.theme,
-        firstDayOfWeek: profile.first_day_of_week,
-        monthlyBudget: profile.monthly_budget,
-        onboardingComplete: profile.onboarding_completed,
-      });
-    }
+    return syncGate.run('pull', runGatedSync);
   },
 
   async shouldReplaceLocalFromRemote(): Promise<boolean> {
@@ -228,6 +202,7 @@ export const syncService = {
     await syncQueueRepository.clear();
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
+    bumpFinanceRevision();
   },
 
   async syncPendingChanges(): Promise<void> {
@@ -235,38 +210,7 @@ export const syncService = {
   },
 
   async performFullSync(): Promise<void> {
-    if (!isSupabaseConfigured() || !getCurrentUserId()) {
-      emit('offline', null, await syncQueueRepository.count());
-      return;
-    }
-    const online = await isOnline();
-    const pending = await syncQueueRepository.count();
-    if (!online) {
-      await syncStateRepository.save({ status: 'offline' });
-      emit('offline', (await syncStateRepository.get()).lastSyncedAt, pending);
-      return;
-    }
-
-    emit('syncing', (await syncStateRepository.get()).lastSyncedAt, pending);
-    await syncStateRepository.save({ status: 'syncing', lastError: null });
-    try {
-      if (await this.shouldReplaceLocalFromRemote()) {
-        await this.replaceLocalFromRemote();
-      } else {
-        await this.pushLocalChanges();
-        await this.pullRemoteChanges();
-      }
-      const syncedAt = nowIso();
-      await syncStateRepository.save({ lastSyncedAt: syncedAt, status: 'synced', lastError: null });
-      emit('synced', syncedAt, await syncQueueRepository.count());
-    } catch (error) {
-      logError('sync.full', error);
-      await syncStateRepository.save({
-        status: 'error',
-        lastError: error instanceof Error ? error.message : 'Sync failed',
-      });
-      emit('error', (await syncStateRepository.get()).lastSyncedAt, await syncQueueRepository.count());
-    }
+    return syncGate.run('full', runGatedSync);
   },
 
   async startRealtime(userId: string, onChange: () => void): Promise<void> {
@@ -306,3 +250,114 @@ export const syncService = {
     }
   },
 };
+
+async function runGatedSync(kind: 'pull' | 'full'): Promise<void> {
+  if (kind === 'full') await executeFullSync();
+  else await executePullRemoteChanges();
+}
+
+async function executePullRemoteChanges(): Promise<void> {
+  if (!isSupabaseConfigured() || !getCurrentUserId()) return;
+  const state = await syncStateRepository.get();
+  const since = state.lastSyncedAt;
+  syncLog('starting pull');
+  const [transactions, categories, budgets, recurring, accounts, investments, profile] = await Promise.all([
+    remoteApi.pullTransactions(since),
+    remoteApi.pullCategories(since),
+    remoteApi.pullBudgets(since),
+    remoteApi.pullRecurring(since),
+    remoteApi.pullAccounts(since),
+    remoteApi.pullInvestments(since),
+    remoteApi.pullProfile(),
+  ]);
+
+  for (const item of accounts) await applyRemoteRecord('account', item);
+  for (const item of investments) await applyRemoteRecord('investment', item);
+  for (const item of categories) await applyRemoteRecord('category', item);
+  for (const item of recurring) await applyRemoteRecord('recurring', item);
+  for (const item of transactions) await applyRemoteRecord('transaction', item);
+  for (const item of budgets) await applyRemoteRecord('budget', item);
+
+  if (categories.length > 0) {
+    const keep = new Set(categories.map((item) => item.id));
+    const local = await categoryRepository.list();
+    for (const category of local) {
+      if (!category.isDefault || keep.has(category.id)) continue;
+      const [usedByTransactions, usedByRecurring] = await Promise.all([
+        transactionRepository.countByCategory(category.id),
+        recurringRepository.countByCategory(category.id),
+      ]);
+      if (usedByTransactions + usedByRecurring === 0) {
+        await categoryRepository.hide(category.id);
+      }
+    }
+    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    await categoryDedupeService.apply();
+  }
+
+  syncEntityLog('transaction', 'pull', String(transactions.length));
+  syncEntityLog('category', 'pull', String(categories.length));
+  syncEntityLog('account', 'pull', String(accounts.length));
+  syncEntityLog('budget', 'pull', String(budgets.length));
+  syncEntityLog('recurring', 'pull', String(recurring.length));
+  syncEntityLog('investment', 'pull', String(investments.length));
+
+  if (profile) {
+    await settingsRepository.update({
+      currency: profile.currency,
+      currencySymbol: profile.currency_symbol,
+      theme: profile.theme,
+      firstDayOfWeek: profile.first_day_of_week,
+      monthlyBudget: profile.monthly_budget,
+      onboardingComplete: profile.onboarding_completed,
+    });
+  }
+  syncLog('pull complete');
+}
+
+async function executeFullSync(): Promise<void> {
+  syncLog('initializing');
+  const userId = getCurrentUserId();
+  if (!isSupabaseConfigured()) {
+    syncLog('cloud not configured');
+    emit('offline', null, await syncQueueRepository.count());
+    return;
+  }
+  if (!userId) {
+    syncLog('waiting for authentication');
+    emit('offline', null, await syncQueueRepository.count());
+    return;
+  }
+  syncLog(`authenticated user: ${shortUserId(userId)}`);
+  const online = await isOnline();
+  const pending = await syncQueueRepository.count();
+  if (!online) {
+    syncLog('offline');
+    await syncStateRepository.save({ status: 'offline' });
+    emit('offline', (await syncStateRepository.get()).lastSyncedAt, pending);
+    return;
+  }
+
+  emit('syncing', (await syncStateRepository.get()).lastSyncedAt, pending);
+  await syncStateRepository.save({ status: 'syncing', lastError: null });
+  try {
+    if (await syncService.shouldReplaceLocalFromRemote()) {
+      await syncService.replaceLocalFromRemote();
+    } else {
+      await syncService.pushLocalChanges();
+      await executePullRemoteChanges();
+    }
+    const syncedAt = nowIso();
+    await syncStateRepository.save({ lastSyncedAt: syncedAt, status: 'synced', lastError: null });
+    emit('synced', syncedAt, await syncQueueRepository.count());
+    syncLog('idle');
+  } catch (error) {
+    logError('sync.full', error);
+    await syncStateRepository.save({
+      status: 'error',
+      lastError: error instanceof Error ? error.message : 'Sync failed',
+    });
+    emit('error', (await syncStateRepository.get()).lastSyncedAt, await syncQueueRepository.count());
+  }
+}
+

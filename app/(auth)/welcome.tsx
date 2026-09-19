@@ -2,6 +2,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { Button } from '@/components/ui/Button';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore } from '@/store/useSettingsStore';
 
@@ -12,7 +13,7 @@ export default function WelcomeAuthScreen() {
   return (
     <Screen>
       <View style={styles.content}>
-        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <BrandLockup size={64} />
         <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
         <Text style={[styles.copy, { color: colors.textSecondary }]}>
           Sign in to sync across devices. Everything still works on this phone when you are offline.
@@ -31,7 +32,6 @@ export default function WelcomeAuthScreen() {
 
 const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: 'center', gap: 16 },
-  brand: { fontSize: 15, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
   title: { fontSize: 34, fontWeight: '800', letterSpacing: -0.8, lineHeight: 40 },
   copy: { fontSize: 16, lineHeight: 24, marginBottom: 8 },
 });
