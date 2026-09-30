@@ -5,6 +5,7 @@ import type { RecurringInput } from '@/types';
 import { nowIso } from '@/utils/dates';
 import { AppError, logError } from '@/utils/errors';
 import { addFrequency, dueOccurrences, fromDateKey, toDateKey, todayKey } from '@/utils/dates';
+import { recurringOccurrenceId } from '@/utils/deterministicId';
 
 export const recurringService = {
   list() {
@@ -68,22 +69,29 @@ export const recurringService = {
       const dates = dueOccurrences(fromDateKey(item.nextDate), item.frequency, fromDateKey(today));
       for (const date of dates) {
         const dateKey = toDateKey(date);
-        const exists = await transactionRepository.existsForRecurringOnDate(item.id, dateKey);
-        if (exists) {
+        const occurrenceId = recurringOccurrenceId(item.id, dateKey);
+        const [exists, known] = await Promise.all([
+          transactionRepository.existsForRecurringOnDate(item.id, dateKey),
+          transactionRepository.getByIdIncludingDeleted(occurrenceId),
+        ]);
+        if (exists || known) {
           continue;
         }
-        const generated = await transactionRepository.create({
-          type: item.type,
-          amount: item.amount,
-          categoryId: item.categoryId,
-          title: item.title,
-          date: dateKey,
-          paymentMethod: item.paymentMethod,
-          notes: 'Generated from recurring transaction',
-          isRecurring: true,
-          recurringId: item.id,
-          accountId: item.accountId,
-        });
+        const generated = await transactionRepository.create(
+          {
+            type: item.type,
+            amount: item.amount,
+            categoryId: item.categoryId,
+            title: item.title,
+            date: dateKey,
+            paymentMethod: item.paymentMethod,
+            notes: 'Generated from recurring transaction',
+            isRecurring: true,
+            recurringId: item.id,
+            accountId: item.accountId,
+          },
+          { id: occurrenceId }
+        );
         await queueChange('transaction', generated.id, 'create', generated);
         created += 1;
       }

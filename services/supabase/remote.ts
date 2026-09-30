@@ -22,6 +22,11 @@ import {
   type RemoteRecurring,
   type RemoteTransaction,
 } from './mappers';
+import type { PullColumn } from '@/utils/syncLogic';
+
+function isMissingFunction(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST202' || /could not find the function/i.test(error.message ?? '');
+}
 
 function isMissingTable(error: unknown): boolean {
   const record = error && typeof error === 'object' ? (error as { code?: unknown; message?: unknown }) : null;
@@ -50,6 +55,45 @@ export const remoteApi = {
     const userId = await requireUserId();
     const { error } = await supabase.from('transactions').upsert(toRemoteTransaction(item, userId));
     if (error) throw error;
+  },
+
+  /**
+   * Upload a generated recurring occurrence without resurrecting a copy another
+   * device already deleted. Returns 'deleted_remotely' when the server copy is deleted.
+   */
+  async insertGeneratedTransaction(item: Transaction): Promise<'inserted' | 'updated' | 'deleted_remotely'> {
+    const userId = await requireUserId();
+    const row = toRemoteTransaction(item, userId);
+    const inserted = await supabase
+      .from('transactions')
+      .upsert(row, { onConflict: 'id', ignoreDuplicates: true })
+      .select('id');
+    if (inserted.error) throw inserted.error;
+    if ((inserted.data ?? []).length > 0) return 'inserted';
+
+    const existing = await supabase
+      .from('transactions')
+      .select('deleted_at')
+      .eq('id', row.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existing.error) throw existing.error;
+    if (!existing.data) throw new Error('Generated transaction id conflicts with an inaccessible row.');
+    if (existing.data.deleted_at) return 'deleted_remotely';
+
+    const { error } = await supabase.from('transactions').upsert(row);
+    if (error) throw error;
+    return 'updated';
+  },
+
+  /** Server clock for the pull cursor; null until migration 008 is applied. */
+  async serverTime(): Promise<string | null> {
+    const { data, error } = await supabase.rpc('sync_server_time');
+    if (error) {
+      if (isMissingFunction(error)) return null;
+      throw error;
+    }
+    return typeof data === 'string' ? data : null;
   },
 
   async deleteTransaction(id: string, deletedAt: string): Promise<void> {
@@ -126,10 +170,10 @@ export const remoteApi = {
     if (error) throw error;
   },
 
-  async pullInvestments(since?: string | null): Promise<ReturnType<typeof fromRemoteInvestment>[]> {
+  async pullInvestments(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteInvestment>[]> {
     const userId = await requireUserId();
     let query = supabase.from('investments').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) {
       if (isMissingTable(error)) return [];
@@ -138,10 +182,10 @@ export const remoteApi = {
     return ((data ?? []) as RemoteInvestment[]).map(fromRemoteInvestment);
   },
 
-  async pullAccounts(since?: string | null): Promise<ReturnType<typeof fromRemoteAccount>[]> {
+  async pullAccounts(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteAccount>[]> {
     const userId = await requireUserId();
     let query = supabase.from('accounts').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteAccount[]).map(fromRemoteAccount);
@@ -169,37 +213,37 @@ export const remoteApi = {
     if (error) throw error;
   },
 
-  async pullTransactions(since?: string | null): Promise<ReturnType<typeof fromRemoteTransaction>[]> {
+  async pullTransactions(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteTransaction>[]> {
     const userId = await requireUserId();
     let query = supabase.from('transactions').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteTransaction[]).map(fromRemoteTransaction);
   },
 
-  async pullCategories(since?: string | null): Promise<ReturnType<typeof fromRemoteCategory>[]> {
+  async pullCategories(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteCategory>[]> {
     const userId = await requireUserId();
     let query = supabase.from('categories').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteCategory[]).map(fromRemoteCategory);
   },
 
-  async pullBudgets(since?: string | null): Promise<ReturnType<typeof fromRemoteBudget>[]> {
+  async pullBudgets(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteBudget>[]> {
     const userId = await requireUserId();
     let query = supabase.from('budgets').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteBudget[]).map(fromRemoteBudget);
   },
 
-  async pullRecurring(since?: string | null): Promise<ReturnType<typeof fromRemoteRecurring>[]> {
+  async pullRecurring(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteRecurring>[]> {
     const userId = await requireUserId();
     let query = supabase.from('recurring_transactions').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteRecurring[]).map(fromRemoteRecurring);

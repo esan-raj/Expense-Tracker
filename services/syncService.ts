@@ -9,9 +9,14 @@ import { recurringRepository } from '@/database/repositories/recurringRepository
 import { accountRepository } from '@/database/repositories/accountRepository';
 import { investmentRepository } from '@/database/repositories/investmentRepository';
 import { settingsRepository } from '@/database/repositories/settingsRepository';
-import { syncQueueRepository, syncStateRepository } from '@/database/repositories/syncQueueRepository';
+import {
+  syncCursorRepository,
+  syncQueueRepository,
+  syncStateRepository,
+} from '@/database/repositories/syncQueueRepository';
 import { getCurrentUserId, setCurrentUserId } from '@/database/session';
-import { resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogic';
+import { planPull, resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogic';
+import { recurringOccurrenceId } from '@/utils/deterministicId';
 import { collectSyncDependencyRefs, missingDependencyIds } from '@/utils/syncDependencies';
 import { getErrorMessage, logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
@@ -28,6 +33,11 @@ function emit(status: SyncStatus, lastSyncedAt: string | null, pending: number) 
 
 function shortUserId(userId: string): string {
   return `${userId.slice(0, 8)}…`;
+}
+
+function isGeneratedOccurrence(payload: { id?: string; recurringId?: string | null; date?: string }): boolean {
+  if (!payload.id || !payload.recurringId || !payload.date) return false;
+  return payload.id === recurringOccurrenceId(payload.recurringId, payload.date.slice(0, 10));
 }
 
 function syncLog(message: string): void {
@@ -182,6 +192,12 @@ export const syncService = {
           if (item.entityType === 'recurring') await remoteApi.deleteRecurring(item.entityId, deletedAt);
           if (item.entityType === 'account') await remoteApi.deleteAccount(item.entityId, deletedAt);
           if (item.entityType === 'investment') await remoteApi.deleteInvestment(item.entityId, deletedAt);
+        } else if (item.entityType === 'transaction' && isGeneratedOccurrence(payload)) {
+          const result = await remoteApi.insertGeneratedTransaction(payload as never);
+          if (result === 'deleted_remotely') {
+            await transactionRepository.delete(item.entityId);
+            bumpFinanceRevision();
+          }
         } else {
           if (item.entityType === 'transaction') await remoteApi.upsertTransaction(payload as never);
           if (item.entityType === 'category') await remoteApi.upsertCategory(payload as never);
@@ -219,6 +235,8 @@ export const syncService = {
   },
 
   async replaceLocalFromRemote(): Promise<void> {
+    const userId = getCurrentUserId();
+    const serverNow = await remoteApi.serverTime();
     const [transactions, categories, budgets, recurring, accounts, investments] = await Promise.all([
       remoteApi.pullTransactions(null),
       remoteApi.pullCategories(null),
@@ -236,6 +254,7 @@ export const syncService = {
     await syncQueueRepository.clear();
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
+    if (userId && serverNow) await syncCursorRepository.save(userId, serverNow, true);
     bumpFinanceRevision();
   },
 
@@ -291,17 +310,22 @@ async function runGatedSync(kind: 'pull' | 'full'): Promise<void> {
 }
 
 async function executePullRemoteChanges(): Promise<void> {
-  if (!isSupabaseConfigured() || !getCurrentUserId()) return;
+  const userId = getCurrentUserId();
+  if (!isSupabaseConfigured() || !userId) return;
   const state = await syncStateRepository.get();
-  const since = state.lastSyncedAt;
-  syncLog('starting pull');
+  const legacySince = state.lastSyncedAt;
+  const serverNow = await remoteApi.serverTime();
+  const stored = serverNow ? await syncCursorRepository.get(userId) : { cursor: null, lastFullPullAt: null };
+  const plan = planPull({ serverNow, cursor: stored.cursor, lastFullPullAt: stored.lastFullPullAt, legacySince });
+  const { since, column } = plan;
+  syncLog(`starting pull (${plan.full ? 'full' : 'incremental'}, ${column})`);
   const [transactions, categories, budgets, recurring, accounts, investments, profile] = await Promise.all([
-    remoteApi.pullTransactions(since),
-    remoteApi.pullCategories(since),
-    remoteApi.pullBudgets(since),
-    remoteApi.pullRecurring(since),
-    remoteApi.pullAccounts(since),
-    remoteApi.pullInvestments(since),
+    remoteApi.pullTransactions(since, column),
+    remoteApi.pullCategories(since, column),
+    remoteApi.pullBudgets(since, column),
+    remoteApi.pullRecurring(since, column),
+    remoteApi.pullAccounts(since, column),
+    remoteApi.pullInvestments(since, column),
     remoteApi.pullProfile(),
   ]);
 
@@ -312,7 +336,7 @@ async function executePullRemoteChanges(): Promise<void> {
   for (const item of transactions) await applyRemoteRecord('transaction', item);
   for (const item of budgets) await applyRemoteRecord('budget', item);
 
-  if (categories.length > 0 && !since) {
+  if (categories.length > 0 && !legacySince) {
     const keep = new Set(categories.map((item) => item.id));
     const local = await categoryRepository.list();
     for (const category of local) {
@@ -349,6 +373,7 @@ async function executePullRemoteChanges(): Promise<void> {
       onboardingComplete: profile.onboarding_completed,
     });
   }
+  if (serverNow) await syncCursorRepository.save(userId, serverNow, plan.full);
   syncLog('pull complete');
 }
 

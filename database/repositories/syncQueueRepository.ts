@@ -137,3 +137,36 @@ export const syncStateRepository = {
     });
   },
 };
+
+/**
+ * Server-clock pull cursor per user. Stored as extra sync_state documents
+ * (value in lastSyncedAt) so no RxDB schema migration is needed.
+ */
+const PULL_CURSOR_PREFIX = 'pull-cursor:';
+const FULL_PULL_PREFIX = 'full-pull:';
+
+async function readStamp(id: string): Promise<string | null> {
+  const db = await getRxDatabase();
+  const row = await db.syncState.findOne(id).exec();
+  return row ? emptyToNull(row.toMutableJSON().lastSyncedAt) : null;
+}
+
+async function writeStamp(id: string, userId: string, value: string): Promise<void> {
+  const db = await getRxDatabase();
+  await db.syncState.upsert({ id, userId, lastSyncedAt: value, status: '', lastError: '' });
+}
+
+export const syncCursorRepository = {
+  async get(userId: string): Promise<{ cursor: string | null; lastFullPullAt: string | null }> {
+    const [cursor, lastFullPullAt] = await Promise.all([
+      readStamp(PULL_CURSOR_PREFIX + userId),
+      readStamp(FULL_PULL_PREFIX + userId),
+    ]);
+    return { cursor, lastFullPullAt };
+  },
+
+  async save(userId: string, serverTime: string, full: boolean): Promise<void> {
+    await writeStamp(PULL_CURSOR_PREFIX + userId, userId, serverTime);
+    if (full) await writeStamp(FULL_PULL_PREFIX + userId, userId, serverTime);
+  },
+};

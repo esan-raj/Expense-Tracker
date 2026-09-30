@@ -91,6 +91,49 @@ export function coalesceQueue(
   ];
 }
 
+export const FULL_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** Re-reads rows stamped just before the cursor whose transaction committed after the last pull. */
+export const PULL_CURSOR_OVERLAP_MS = 60 * 1000;
+
+export type PullColumn = 'updated_at' | 'server_updated_at';
+
+export interface PullPlanInput {
+  /** Server clock read right before pulling; null when the server cursor migration is missing. */
+  serverNow: string | null;
+  cursor: string | null;
+  lastFullPullAt: string | null;
+  /** Client-clock lastSyncedAt used before the server cursor existed. */
+  legacySince: string | null;
+}
+
+export interface PullPlan {
+  column: PullColumn;
+  since: string | null;
+  full: boolean;
+}
+
+export function planPull(input: PullPlanInput): PullPlan {
+  if (!input.serverNow) {
+    return { column: 'updated_at', since: input.legacySince, full: !input.legacySince };
+  }
+  const serverMs = Date.parse(input.serverNow);
+  const cursorMs = input.cursor ? Date.parse(input.cursor) : NaN;
+  const lastFullMs = input.lastFullPullAt ? Date.parse(input.lastFullPullAt) : NaN;
+  const fullDue =
+    !Number.isFinite(cursorMs) ||
+    !Number.isFinite(lastFullMs) ||
+    !Number.isFinite(serverMs) ||
+    serverMs - lastFullMs >= FULL_RESYNC_INTERVAL_MS;
+  if (fullDue) {
+    return { column: 'server_updated_at', since: null, full: true };
+  }
+  return {
+    column: 'server_updated_at',
+    since: new Date(cursorMs - PULL_CURSOR_OVERLAP_MS).toISOString(),
+    full: false,
+  };
+}
+
 export function nextRetryDelayMs(retryCount: number): number {
   const capped = Math.min(Math.max(retryCount, 0), 3);
   return 1000 * 2 ** capped;

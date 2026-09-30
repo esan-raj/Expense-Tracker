@@ -108,9 +108,9 @@ function toDoc(input: TransactionInput, id: string, createdAt: string, updatedAt
 }
 
 export const transactionRepository = {
-  async create(input: TransactionInput): Promise<Transaction> {
+  async create(input: TransactionInput, options: { id?: string } = {}): Promise<Transaction> {
     const db = await getRxDatabase();
-    const id = createId();
+    const id = options.id ?? createId();
     const timestamp = nowIso();
     await db.transactions.insert(toDoc(input, id, timestamp, timestamp, ownerId()));
     return this.getById(id) as Promise<Transaction>;
