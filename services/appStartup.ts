@@ -145,7 +145,7 @@ export function createAppStartupController(deps: {
     }
 
     setPhase('opening-local-database');
-    // Soft: a hung SQLite/RxDB open must not trap the user on StartupScreen.
+    // Soft: a hung SQLite/RxDB open must not trap the user on the loading screen.
     await runSoft(deps.steps.openLocalDatabase, dbTimeoutMs, 'local database');
     if (!stillCurrent()) return;
 

@@ -18,7 +18,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { bumpFinanceRevision } from '@/services/financeRevision';
 import { DesktopSidebar } from '@/components/layout/DesktopSidebar';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
-import { StartupScreen } from '@/components/startup/StartupScreen';
+import { LoadingState } from '@/components/ui/LoadingState';
 import { UpdateReadyBar } from '@/components/updates/UpdateReadyBar';
 import { UpdateReadyModal } from '@/components/updates/UpdateReadyModal';
 import { appUpdateController } from '@/services/appUpdate';
@@ -143,9 +143,7 @@ export default function RootLayout() {
   }, [startup.phase, user]);
 
   if (startup.phase !== 'ready') {
-    return (
-      <StartupScreen phase={startup.phase} message={startup.message} onReady={hideSplash} />
-    );
+    return <LoadingState message="Preparing your finances…" onReady={hideSplash} />;
   }
 
   return <RootNavigation />;
