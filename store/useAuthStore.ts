@@ -31,13 +31,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     if (user) {
       setCurrentUserId(user.id);
-    } else if (localSync.userId) {
-      // Keep local finance scope even if the JWT blob is missing/expired.
-      setCurrentUserId(localSync.userId);
-      setScopedUserId(localSync.userId);
     } else {
+      // Signed out: keep showing the last account's local rows, but don't mark a
+      // current user — that would make sync push without a valid login.
       setCurrentUserId(null);
-      setScopedUserId(null);
+      setScopedUserId(localSync.userId);
     }
 
     console.info('[supabase][auth] local session restored:', Boolean(session));

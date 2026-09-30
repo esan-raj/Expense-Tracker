@@ -1,5 +1,3 @@
-import { toUserMessage } from '@/utils/errors';
-
 export type StartupPhase =
   | 'initializing'
   | 'restoring-session'
@@ -110,6 +108,10 @@ export function createAppStartupController(deps: {
   const forceReadyMs = deps.forceReadyMs ?? STARTUP_FORCE_READY_MS;
   const updateTimeoutMs = deps.updateTimeoutMs ?? STARTUP_UPDATE_TIMEOUT_MS;
   let inFlight: Promise<void> | null = null;
+  // Tracked here rather than read back through getState(): React applies setState
+  // on a later render, so getState() can lag behind the run that just started.
+  let activeGeneration = deps.getState().generation;
+  let readyGeneration = -1;
 
   const setPhase = (phase: StartupPhase, error: string | null = null) => {
     deps.setState({
@@ -120,45 +122,52 @@ export function createAppStartupController(deps: {
   };
 
   const markReady = (generation: number) => {
-    if (deps.getState().generation !== generation) return;
-    if (deps.getState().phase === 'ready') return;
+    if (activeGeneration !== generation) return;
+    if (readyGeneration === generation) return;
+    readyGeneration = generation;
     setPhase('ready');
     deps.steps.afterReady?.();
   };
 
-  const runPipeline = async (generation: number): Promise<void> => {
-    const stillCurrent = () => deps.getState().generation === generation;
+  const runPipeline = async (generation: number): Promise<'reloading' | 'done'> => {
+    const stillCurrent = () => activeGeneration === generation;
+    // The force-ready timer can open the app while steps are still running;
+    // later progress labels must not pull the phase back off 'ready'.
+    const progress = (phase: StartupPhase) => {
+      if (readyGeneration !== generation) setPhase(phase);
+    };
 
     if (deps.steps.applyUpdate) {
-      setPhase('initializing');
+      progress('initializing');
       try {
         const result = await withStartupTimeout(
           deps.steps.applyUpdate(),
           updateTimeoutMs,
           'startup update check'
         );
-        if (result === 'reloading') return;
+        if (result === 'reloading') return 'reloading';
       } catch {
         // Offline or Expo Updates unavailable — continue with local launch.
       }
-      if (!stillCurrent()) return;
+      if (!stillCurrent()) return 'done';
     }
 
-    setPhase('opening-local-database');
+    progress('opening-local-database');
     // Soft: a hung SQLite/RxDB open must not trap the user on the loading screen.
     await runSoft(deps.steps.openLocalDatabase, dbTimeoutMs, 'local database');
-    if (!stillCurrent()) return;
+    if (!stillCurrent()) return 'done';
 
-    setPhase('restoring-session');
+    progress('restoring-session');
     await runSoft(deps.steps.restoreSession, softTimeoutMs, 'session restore');
-    if (!stillCurrent()) return;
+    if (!stillCurrent()) return 'done';
 
-    setPhase('loading-dashboard');
+    progress('loading-dashboard');
     await runSoft(deps.steps.loadLocalStores, softTimeoutMs, 'local stores');
-    if (!stillCurrent()) return;
+    if (!stillCurrent()) return 'done';
     void runSoft(deps.steps.prepareDashboard, softTimeoutMs, 'dashboard seed');
 
     markReady(generation);
+    return 'done';
   };
 
   const start = async (): Promise<StartupState> => {
@@ -167,7 +176,8 @@ export function createAppStartupController(deps: {
       return deps.getState();
     }
 
-    const generation = deps.getState().generation + 1;
+    const generation = Math.max(activeGeneration, deps.getState().generation) + 1;
+    activeGeneration = generation;
     deps.setState({
       generation,
       phase: 'initializing',
@@ -181,32 +191,31 @@ export function createAppStartupController(deps: {
       }, forceReadyMs);
 
       let attempt = 0;
+      let outcome: 'reloading' | 'done' = 'done';
       try {
         while (attempt <= maxTransientRetries) {
           try {
-            await runPipeline(generation);
+            outcome = await runPipeline(generation);
             return;
           } catch (error) {
-            if (deps.getState().generation !== generation) return;
-            if (deps.getState().phase === 'ready') return;
+            if (activeGeneration !== generation || readyGeneration === generation) return;
             const transient = isTransientStartupFailure(error) && attempt < maxTransientRetries;
             if (transient) {
               attempt += 1;
               continue;
             }
-            // Prefer entering the app over a permanent branded loader.
+            // Prefer entering the app over a permanent loading screen.
             markReady(generation);
-            if (deps.getState().phase !== 'ready') {
-              setPhase(
-                'recoverable-error',
-                toUserMessage(error, 'SpendWise could not start. Please try again.')
-              );
-            }
             return;
           }
         }
       } finally {
-        clearTimeout(forceTimer);
+        // While an OTA reload is pending, keep the force timer as a fallback in case
+        // the reload never happens; otherwise make sure this run cannot end unready.
+        if (outcome !== 'reloading') {
+          clearTimeout(forceTimer);
+          markReady(generation);
+        }
       }
     })().finally(() => {
       inFlight = null;

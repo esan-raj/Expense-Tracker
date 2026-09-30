@@ -161,6 +161,7 @@ describe('app startup state machine', () => {
     expect(state.phase).toBe('ready');
     gate.resolve();
     await pending;
+    expect(state.phase).toBe('ready');
   });
 
   it('soft-fails database throws and still reaches ready', async () => {
@@ -183,6 +184,31 @@ describe('app startup state machine', () => {
     await controller.start();
     expect(state.phase).toBe('ready');
     expect(isTransientStartupFailure(new Error('network timeout'))).toBe(true);
+  });
+
+  it('reaches ready when state updates apply after the pipeline has moved on', async () => {
+    let state = createInitialStartupState();
+    const controller = createAppStartupController({
+      getState: () => state,
+      setState: (partial) => {
+        setTimeout(() => {
+          state = { ...state, ...partial };
+        }, 0);
+      },
+      forceReadyMs: 30_000,
+      steps: {
+        applyUpdate: async () => 'skipped',
+        openLocalDatabase: async () => undefined,
+        restoreSession: async () => undefined,
+        loadLocalStores: async () => undefined,
+        prepareDashboard: async () => undefined,
+      },
+    });
+
+    await controller.start();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.phase).toBe('ready');
+    expect(state.generation).toBe(1);
   });
 
   it('skips remaining work when applyUpdate returns reloading', async () => {

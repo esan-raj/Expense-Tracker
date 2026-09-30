@@ -42,7 +42,6 @@ export default function RootLayout() {
   const seenUserIdRef = useRef<string | null | undefined>(undefined);
   const splashHiddenRef = useRef(false);
   const startupRef = useRef(startup);
-  startupRef.current = startup;
 
   const hideSplash = () => {
     if (splashHiddenRef.current) return;
@@ -54,7 +53,10 @@ export default function RootLayout() {
   if (!controllerRef.current) {
     controllerRef.current = createAppStartupController({
       getState: () => startupRef.current,
-      setState: (partial) => setStartup((prev) => ({ ...prev, ...partial })),
+      setState: (partial) => {
+        startupRef.current = { ...startupRef.current, ...partial };
+        setStartup(startupRef.current);
+      },
       steps: {
         applyUpdate: () => applyStartupUpdateIfAvailable(),
         openLocalDatabase: async () => {
