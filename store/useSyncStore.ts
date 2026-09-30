@@ -3,6 +3,7 @@ import NetInfo, { type NetInfoSubscription } from '@react-native-community/netin
 import { syncService, subscribeSyncStatus } from '@/services/syncService';
 import { syncQueueRepository, syncStateRepository } from '@/database/repositories/syncQueueRepository';
 import { getCurrentUserId } from '@/database/session';
+import { setLocalChangeHandler } from '@/services/outbox';
 import type { SyncStatus } from '@/types/sync';
 
 interface SyncStoreState {
@@ -55,6 +56,12 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     set({
       isOnline,
       status: isOnline ? get().status : 'offline',
+    });
+
+    setLocalChangeHandler(() => {
+      if (get().isOnline && getCurrentUserId()) {
+        void get().syncNow();
+      }
     });
 
     networkSubscription = NetInfo.addEventListener((next) => {
