@@ -31,10 +31,19 @@ import {
 import { dashboardUserKey, loadHomeDashboardSnapshot } from '@/services/dashboardSnapshot';
 import { clearDashboardSeed, setDashboardSeed } from '@/services/dashboardSeed';
 import { currentMonthYear } from '@/utils/dates';
+import { logError } from '@/utils/errors';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 const LAUNCH_UPDATE_SETTLE_MS = 1_200;
+
+/** Never blocks startup; a NetInfo or sync failure is logged and retried on the next call. */
+function startNetworkSyncInBackground(): void {
+  void useSyncStore
+    .getState()
+    .startNetworkSync()
+    .catch((error) => logError('sync.network-start', error));
+}
 
 export default function RootLayout() {
   const [startup, setStartup] = useState<StartupState>(createInitialStartupState);
@@ -95,7 +104,7 @@ export default function RootLayout() {
         afterReady: () => {
           void recurringService.processDue().catch(() => undefined);
           void useAuthStore.getState().connectCloud();
-          void useSyncStore.getState().startNetworkSync();
+          startNetworkSyncInBackground();
         },
       },
     });
@@ -136,7 +145,7 @@ export default function RootLayout() {
       void loadInvestments();
     });
     if (seenUserIdRef.current !== user.id) {
-      void useSyncStore.getState().startNetworkSync();
+      startNetworkSyncInBackground();
     }
     if (seenUserIdRef.current !== undefined && seenUserIdRef.current !== user.id) {
       clearDashboardSeed();

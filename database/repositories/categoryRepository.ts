@@ -146,6 +146,13 @@ export const categoryRepository = {
     await Promise.all(rows.map((row) => row.incrementalPatch({ userId })));
   },
 
+  /** Active categories owned by this account; signed-out local rows (userId '') are excluded. */
+  async listActiveOwnedBy(userId: string): Promise<Array<Pick<Category, 'id' | 'isDefault'>>> {
+    const db = await getRxDatabase();
+    const rows = await db.categories.find({ selector: { userId, deletedAt: '' } }).exec();
+    return rows.map((row) => ({ id: row.id, isDefault: Boolean(row.isDefault) }));
+  },
+
   async hide(id: string): Promise<void> {
     const db = await getRxDatabase();
     const row = await db.categories.findOne(id).exec();

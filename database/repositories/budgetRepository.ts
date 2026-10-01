@@ -131,6 +131,11 @@ export const budgetRepository = {
     await Promise.all(rows.map((row) => row.incrementalPatch({ deletedAt: timestamp, updatedAt: timestamp })));
   },
 
+  async countByCategory(categoryId: string): Promise<number> {
+    const db = await getRxDatabase();
+    return db.budgets.count({ selector: { categoryId, deletedAt: '' } }).exec();
+  },
+
   async reassignCategory(fromId: string, toId: string): Promise<void> {
     const db = await getRxDatabase();
     const rows = await db.budgets.find({ selector: { categoryId: fromId, deletedAt: '' } }).exec();

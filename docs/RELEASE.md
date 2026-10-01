@@ -183,6 +183,36 @@ Add `--group <update-group-id>` to republish a specific group. Republishing cann
 - Supabase SQL/RLS migrations are a separate deployment. Publishing OTA does not apply them.
 - Rolling back JavaScript does **not** reverse RxDB or Supabase migrations. If a schema migration already ran on a device, republishing older JS can break that device until you ship forward-compatible code.
 
+### Sync cursor migrations (008, 009)
+
+Apply in order in the Supabase SQL editor. `009_harden_sync_server_time_permissions.sql` revokes and grants on the function created by `008_server_sync_cursor.sql`, so `009` fails if `008` is missing. The app keeps the legacy `updated_at` pull when `sync_server_time()` does not exist, so these can be applied before or after a compatible OTA.
+
+Manual checks after applying `009` (SQL editor):
+
+```sql
+-- 008 is deployed: function and column exist.
+select to_regprocedure('public.sync_server_time()') is not null as has_function;
+select count(*) = 6 as has_columns
+from information_schema.columns
+where table_schema = 'public'
+  and column_name = 'server_updated_at'
+  and table_name in ('transactions', 'categories', 'budgets', 'recurring_transactions', 'accounts', 'investments');
+
+-- 009 permission boundary: expect authenticated = true, anon = false, public = false.
+select
+  has_function_privilege('authenticated', 'public.sync_server_time()', 'execute') as authenticated,
+  has_function_privilege('anon', 'public.sync_server_time()', 'execute') as anon,
+  exists (
+    select 1 from information_schema.routine_privileges
+    where routine_schema = 'public' and routine_name = 'sync_server_time' and grantee = 'PUBLIC'
+  ) as public;
+
+-- Server timestamp is a valid value close to now().
+select public.sync_server_time() as server_time, abs(extract(epoch from public.sync_server_time() - now())) < 5 as near_now;
+```
+
+From the client (anon key): `supabase.rpc('sync_server_time')` without a session must fail with a permission error (`42501`); after signing in it must return an ISO timestamp. A `PGRST202` error means `008` is not deployed.
+
 ## Physical APK verification
 
 This is the device checklist. It is not performed by repository setup.

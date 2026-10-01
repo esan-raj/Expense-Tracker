@@ -17,6 +17,7 @@ import {
 import { getCurrentUserId, setCurrentUserId } from '@/database/session';
 import { planPull, resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogic';
 import { recurringOccurrenceId } from '@/utils/deterministicId';
+import { findStaleCategoryIds } from '@/utils/categoryReconciliation';
 import { collectSyncDependencyRefs, missingDependencyIds } from '@/utils/syncDependencies';
 import { getErrorMessage, logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
@@ -304,6 +305,37 @@ export const syncService = {
   },
 };
 
+/**
+ * After a complete pull, soft-delete this account's categories the server no longer
+ * has at all (hard-deleted remotely). Remote tombstones were already applied through
+ * applyRemoteRecord. Throws on failure so the pull cursor is not advanced.
+ */
+export async function reconcileCategoriesAfterFullPull(
+  userId: string,
+  remoteCategories: ReadonlyArray<{ id: string }>
+): Promise<string[]> {
+  const [owned, queue] = await Promise.all([
+    categoryRepository.listActiveOwnedBy(userId),
+    syncQueueRepository.list(),
+  ]);
+  const remoteIds = new Set(remoteCategories.map((item) => item.id));
+  const pendingIds = new Set(queue.filter((item) => item.entityType === 'category').map((item) => item.entityId));
+  const referencedIds = new Set<string>();
+  const candidates = findStaleCategoryIds({ owned, remoteIds, pendingIds, referencedIds });
+  for (const id of candidates) {
+    const [transactions, recurring, budgets] = await Promise.all([
+      transactionRepository.countByCategory(id),
+      recurringRepository.countByCategory(id),
+      budgetRepository.countByCategory(id),
+    ]);
+    if (transactions + recurring + budgets > 0) referencedIds.add(id);
+  }
+  const stale = findStaleCategoryIds({ owned, remoteIds, pendingIds, referencedIds });
+  for (const id of stale) await categoryRepository.hide(id);
+  if (stale.length) syncLog(`full pull hid ${stale.length} categories missing on the server`);
+  return stale;
+}
+
 async function runGatedSync(kind: 'pull' | 'full'): Promise<void> {
   if (kind === 'full') await executeFullSync();
   else await executePullRemoteChanges();
@@ -336,22 +368,10 @@ async function executePullRemoteChanges(): Promise<void> {
   for (const item of transactions) await applyRemoteRecord('transaction', item);
   for (const item of budgets) await applyRemoteRecord('budget', item);
 
-  if (categories.length > 0 && !legacySince) {
-    const keep = new Set(categories.map((item) => item.id));
-    const local = await categoryRepository.list();
-    for (const category of local) {
-      if (!category.isDefault || keep.has(category.id)) continue;
-      const [usedByTransactions, usedByRecurring] = await Promise.all([
-        transactionRepository.countByCategory(category.id),
-        recurringRepository.countByCategory(category.id),
-      ]);
-      if (usedByTransactions + usedByRecurring === 0) {
-        await categoryRepository.hide(category.id);
-      }
-    }
-    const { categoryDedupeService } = await import('@/services/categoryDedupeService');
-    await categoryDedupeService.apply();
-  } else if (categories.length > 0) {
+  if (plan.full) {
+    await reconcileCategoriesAfterFullPull(userId, categories);
+  }
+  if (plan.full || categories.length > 0) {
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
   }
