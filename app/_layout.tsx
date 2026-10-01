@@ -135,6 +135,9 @@ export default function RootLayout() {
       void loadAccounts();
       void loadInvestments();
     });
+    if (seenUserIdRef.current !== user.id) {
+      void useSyncStore.getState().startNetworkSync();
+    }
     if (seenUserIdRef.current !== undefined && seenUserIdRef.current !== user.id) {
       clearDashboardSeed();
       void loadCategories();

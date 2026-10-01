@@ -20,6 +20,7 @@ interface SyncStoreState {
 
 let statusSubscribed = false;
 let networkSubscription: NetInfoSubscription | null = null;
+let networkStart: Promise<void> | null = null;
 
 export const useSyncStore = create<SyncStoreState>((set, get) => ({
   status: 'idle',
@@ -44,35 +45,34 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     }
   },
   startNetworkSync: async () => {
-    if (networkSubscription) {
-      if (getCurrentUserId() && get().isOnline) {
-        void get().syncNow();
-      }
-      return;
+    if (!networkStart) {
+      networkStart = (async () => {
+        const network = await NetInfo.fetch();
+        const isOnline = Boolean(network.isConnected && network.isInternetReachable !== false);
+        set({
+          isOnline,
+          status: isOnline ? get().status : 'offline',
+        });
+
+        setLocalChangeHandler(() => {
+          if (get().isOnline && getCurrentUserId()) {
+            void get().syncNow();
+          }
+        });
+
+        networkSubscription = NetInfo.addEventListener((next) => {
+          const online = Boolean(next.isConnected && next.isInternetReachable !== false);
+          set({ isOnline: online, status: online ? (get().status === 'offline' ? 'idle' : get().status) : 'offline' });
+          if (online && getCurrentUserId()) {
+            void get().syncNow();
+          }
+        });
+      })();
     }
+    await networkStart;
 
-    const network = await NetInfo.fetch();
-    const isOnline = Boolean(network.isConnected && network.isInternetReachable !== false);
-    set({
-      isOnline,
-      status: isOnline ? get().status : 'offline',
-    });
-
-    setLocalChangeHandler(() => {
-      if (get().isOnline && getCurrentUserId()) {
-        void get().syncNow();
-      }
-    });
-
-    networkSubscription = NetInfo.addEventListener((next) => {
-      const online = Boolean(next.isConnected && next.isInternetReachable !== false);
-      set({ isOnline: online, status: online ? (get().status === 'offline' ? 'idle' : get().status) : 'offline' });
-      if (online && getCurrentUserId()) {
-        void get().syncNow();
-      }
-    });
-
-    if (isOnline && getCurrentUserId()) {
+    // Can be called again once the session is known; startup may open the UI before it is.
+    if (get().isOnline && getCurrentUserId()) {
       await get().syncNow();
     }
   },

@@ -67,6 +67,22 @@ describe('local-first sync hydrate', () => {
     expect(syncService.performFullSync).toHaveBeenCalled();
   });
 
+  it('syncs when called again after the session is restored late', async () => {
+    const { useSyncStore } = require('@/store/useSyncStore') as typeof import('@/store/useSyncStore');
+    const { syncService } = require('@/services/syncService') as typeof import('@/services/syncService');
+    const session = require('@/database/session') as { getCurrentUserId: jest.Mock };
+
+    session.getCurrentUserId.mockReturnValue(null);
+    await Promise.all([useSyncStore.getState().startNetworkSync(), useSyncStore.getState().startNetworkSync()]);
+    expect(syncService.performFullSync).not.toHaveBeenCalled();
+    expect(netListen).toHaveBeenCalledTimes(1);
+
+    session.getCurrentUserId.mockReturnValue('u1');
+    await useSyncStore.getState().startNetworkSync();
+    expect(syncService.performFullSync).toHaveBeenCalledTimes(1);
+    expect(netListen).toHaveBeenCalledTimes(1);
+  });
+
   it('startNetworkSync makes local writes trigger a sync', async () => {
     jest.useFakeTimers();
     try {
