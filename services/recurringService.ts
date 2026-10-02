@@ -92,7 +92,18 @@ export const recurringService = {
           },
           { id: occurrenceId }
         );
-        await queueChange('transaction', generated.id, 'create', generated);
+        try {
+          await queueChange('transaction', generated.id, 'create', generated);
+        } catch (error) {
+          // A local row without an outbox entry is skipped as "already generated" and never
+          // uploads. nextDate is not advanced yet, so the next run regenerates the same id.
+          try {
+            await transactionRepository.discardUnsyncedGeneratedOccurrence(generated);
+          } catch (rollbackError) {
+            logError('recurring.rollback', rollbackError);
+          }
+          throw error;
+        }
         created += 1;
       }
       const last = dates[dates.length - 1] ?? fromDateKey(item.nextDate);

@@ -11,6 +11,7 @@ import type {
 import type { AccountLedgerEntry } from '@/utils/accountLogic';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
+import { recurringOccurrenceId } from '@/utils/deterministicId';
 import { mapTransaction, mapTransactionWithCategory } from './mappers';
 import type { TransactionDoc } from '@/database/types';
 
@@ -132,6 +133,35 @@ export const transactionRepository = {
     if (!row) return;
     const timestamp = nowIso();
     await row.incrementalPatch({ deletedAt: timestamp, updatedAt: timestamp });
+  },
+
+  /**
+   * Undo a recurring occurrence this device just generated when its outbox write failed.
+   * Removes the row only if it is still exactly that attempt: derived id for its rule and
+   * date, same createdAt, never edited, not deleted, and not in any outbox. A soft delete
+   * would block regeneration forever, so the never-uploaded row is removed; anything else
+   * is left alone. Returns whether a row was removed; repeating the call is a no-op.
+   */
+  async discardUnsyncedGeneratedOccurrence(
+    generated: Pick<Transaction, 'id' | 'recurringId' | 'date' | 'createdAt'>
+  ): Promise<boolean> {
+    if (!generated.recurringId || generated.id !== recurringOccurrenceId(generated.recurringId, generated.date)) {
+      return false;
+    }
+    const db = await getRxDatabase();
+    const row = await db.transactions.findOne(generated.id).exec();
+    if (!row) return false;
+    const untouched =
+      row.recurringId === generated.recurringId &&
+      row.date === generated.date &&
+      row.createdAt === generated.createdAt &&
+      row.updatedAt === row.createdAt &&
+      !row.deletedAt;
+    if (!untouched) return false;
+    const queued = await db.syncQueue.count({ selector: { entityType: 'transaction', entityId: row.id } }).exec();
+    if (queued > 0) return false;
+    await row.remove();
+    return true;
   },
 
   async getById(id: string): Promise<TransactionWithCategory | null> {
