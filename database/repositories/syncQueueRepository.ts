@@ -152,11 +152,11 @@ export const syncQueueRepository = {
     return claimed;
   },
 
-  /** Drop one account's outbox (local data was replaced from the server). Other owners keep theirs. */
-  async clearForUser(userId: string): Promise<void> {
+  /** Whether this account still has local changes waiting to upload. Other owners' entries are ignored. */
+  async hasPendingForUser(userId: string): Promise<boolean> {
+    if (!userId) return false;
     const db = await getRxDatabase();
-    const rows = await db.syncQueue.find({ selector: { userId } }).exec();
-    await Promise.all(rows.map((row) => row.remove()));
+    return (await db.syncQueue.count({ selector: { userId } }).exec()) > 0;
   },
 
   async markFailure(id: string, error: string, retryCount: number): Promise<void> {

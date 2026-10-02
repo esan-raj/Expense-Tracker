@@ -319,12 +319,14 @@ export const syncService = {
   },
 
   /**
-   * Replace this account's local rows and outbox with the server's. Rows and outboxes of other
-   * accounts on the device are untouched, and the cursor is stored only for this account.
+   * Replace this account's local rows with the server's, but only while the account has nothing
+   * waiting to upload: returns false without touching local data when it does, including
+   * changes made while the server data was downloading. Unassigned rows, other accounts' rows
+   * and every outbox are left alone, and the cursor is stored only for this account.
    */
-  async replaceLocalFromRemote(context?: SyncContext): Promise<void> {
+  async replaceLocalFromRemote(context?: SyncContext): Promise<boolean> {
     const ctx = context ?? captureSyncContext();
-    if (!ctx) return;
+    if (!ctx) return false;
     const serverNow = await remoteApi.serverTime();
     const [transactions, categories, budgets, recurring, accounts, investments] = await Promise.all([
       remoteApi.pullTransactions(null),
@@ -335,6 +337,7 @@ export const syncService = {
       remoteApi.pullInvestments(null),
     ]);
     assertSyncSession(ctx);
+    if (await syncQueueRepository.hasPendingForUser(ctx.userId)) return false;
     const scope = { ownerId: ctx.userId };
     await accountRepository.replaceAll(accounts.filter((item) => !item.deletedAt), scope);
     await investmentRepository.replaceAll(investments.filter((item) => !item.deletedAt), scope);
@@ -342,7 +345,6 @@ export const syncService = {
     await recurringRepository.replaceAll(recurring.filter((item) => !item.deletedAt), scope);
     await transactionRepository.replaceAll(transactions.filter((item) => !item.deletedAt), scope);
     await budgetRepository.replaceAll(budgets.filter((item) => !item.deletedAt), scope);
-    await syncQueueRepository.clearForUser(ctx.userId);
     assertSyncSession(ctx);
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
@@ -351,6 +353,7 @@ export const syncService = {
       await syncCursorRepository.save(ctx.userId, serverNow, true);
     }
     bumpFinanceRevision();
+    return true;
   },
 
   async syncPendingChanges(): Promise<void> {
@@ -546,10 +549,16 @@ async function executeFullSync(): Promise<void> {
   emit('syncing', (await syncStateRepository.get()).lastSyncedAt, pending);
   await syncStateRepository.save({ status: 'syncing', lastError: null });
   try {
+    // Signed-out rows are queued for this account and claimed before deciding how to sync, so
+    // they count as pending work and are uploaded instead of being replaced.
     assertSyncSession(context);
-    if (await syncService.shouldReplaceLocalFromRemote()) {
-      await syncService.replaceLocalFromRemote(context);
-    } else {
+    await syncService.claimUnassigned(userId);
+    assertSyncSession(context);
+    const replaced =
+      !(await syncQueueRepository.hasPendingForUser(userId)) &&
+      (await syncService.shouldReplaceLocalFromRemote()) &&
+      (await syncService.replaceLocalFromRemote(context));
+    if (!replaced) {
       await syncService.pushLocalChanges(context);
       await executePullRemoteChanges(context);
     }

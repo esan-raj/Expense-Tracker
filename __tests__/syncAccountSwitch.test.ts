@@ -45,7 +45,7 @@ const queue = {
   markFailure: jest.fn(async (..._args: unknown[]) => undefined),
   enqueue: jest.fn(async (..._args: unknown[]) => undefined),
   claimUnowned: jest.fn(async (..._args: unknown[]) => 0),
-  clearForUser: jest.fn(async (..._args: unknown[]) => undefined),
+  hasPendingForUser: jest.fn(async (..._args: unknown[]) => false),
   pendingEntityIds: jest.fn(async () => new Set<string>()),
   count: jest.fn(async () => 0),
 };
@@ -314,12 +314,11 @@ describe('sync pipeline when the account changes mid-run', () => {
     await syncService.performFullSync();
 
     for (const repository of Object.values(repos)) expect(repository.replaceAll).not.toHaveBeenCalled();
-    expect(queue.clearForUser).not.toHaveBeenCalled();
     expect(cursors.save).not.toHaveBeenCalledWith('user-a', expect.anything(), expect.anything());
     expect(runsStarted()).toEqual(['user-a', 'user-b']);
   });
 
-  it('replaces only the signed-in account’s rows and outbox', async () => {
+  it('replaces only the signed-in account’s rows, after checking that account has nothing pending', async () => {
     remote.pullAccounts.mockImplementation(async () => [{ id: 'acc-1', updatedAt: '2026-10-01T10:00:00.000Z', deletedAt: null }]);
 
     await syncService.performFullSync();
@@ -327,7 +326,8 @@ describe('sync pipeline when the account changes mid-run', () => {
     for (const repository of Object.values(repos)) {
       expect(repository.replaceAll).toHaveBeenCalledWith(expect.any(Array), { ownerId: 'user-a' });
     }
-    expect(queue.clearForUser).toHaveBeenCalledWith('user-a');
+    expect(queue.hasPendingForUser.mock.calls.map((call) => call[0])).toEqual(['user-a', 'user-a']);
+    expect(queue.removeIfUnchanged).not.toHaveBeenCalled();
     expect(cursors.save).toHaveBeenCalledWith('user-a', '2026-10-01T12:00:00.000Z', true);
   });
 

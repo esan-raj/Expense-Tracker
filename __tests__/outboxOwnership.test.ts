@@ -334,7 +334,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
     expect(await db.transactions.count().exec()).toBe(before.transactions);
   });
 
-  it('a full replacement for one account leaves another account’s rows and outbox alone', async () => {
+  it('a full replacement for one account leaves other accounts’ rows and every outbox alone', async () => {
     const db = await getRxDatabase();
     await db.categories.bulkInsert([category('c-old-a', 'user-a'), category('c-b', 'user-b')]);
     await db.syncQueue.bulkInsert([
@@ -347,12 +347,11 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       [{ id: 'c-new', name: 'From server', icon: 'cart', color: '#111111', type: 'expense', isDefault: false, createdAt: T0 }],
       { ownerId: 'user-a' }
     );
-    await syncQueueRepository.clearForUser('user-a');
 
     expect(await ownerOf('categories', 'c-old-a')).toBeNull();
     expect(await ownerOf('categories', 'c-new')).toBe('user-a');
     expect(await ownerOf('categories', 'c-b')).toBe('user-b');
-    expect((await queueRows()).map((row) => row.id)).toEqual(['q-b']);
+    expect((await queueRows()).map((row) => row.id).sort()).toEqual(['q-a', 'q-b']);
   });
 
   it('does nothing without a user id', async () => {

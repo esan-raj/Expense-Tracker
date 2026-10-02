@@ -22,13 +22,17 @@ export function scopeSelector(includeDeleted = false): Record<string, unknown> {
 }
 
 export interface ReplaceOptions {
-  /** Replace only this account's rows (plus unassigned ones) and store the new rows under it. */
+  /** Replace only rows owned by this account and store the new rows under it. */
   ownerId?: string;
 }
 
-/** Rows a full replacement removes: every row (backup restore) or one account's rows. */
+/**
+ * Rows a full replacement removes: every row (backup restore) or one account's rows.
+ * Unassigned rows (userId '') are never part of an account's replacement: they are signed-out
+ * work that has not been claimed yet.
+ */
 export function replacementQuery(options: ReplaceOptions = {}): { selector: Record<string, unknown> } {
-  return options.ownerId ? { selector: { userId: { $in: [options.ownerId, ''] } } } : { selector: {} };
+  return options.ownerId ? { selector: { userId: options.ownerId } } : { selector: {} };
 }
 
 export function asBoolean(value: unknown): boolean {
