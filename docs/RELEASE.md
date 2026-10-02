@@ -238,7 +238,7 @@ select
 select public.sync_server_time() as server_time, abs(extract(epoch from public.sync_server_time() - now())) < 5 as near_now;
 ```
 
-From the client (anon key): `supabase.rpc('sync_server_time')` without a session must fail with a permission error (`42501`); after signing in it must return a timestamp. A `PGRST202` error means `008` is not deployed. The app treats only `PGRST202` as "not deployed" (legacy pull); a permission error or an unparseable value fails the sync instead of silently falling back.
+From the client (anon key): `supabase.rpc('sync_server_time')` without a session must fail with a permission error (`42501`); after signing in it must return a timestamp. A `PGRST202` error means `008` is not deployed. The app treats only a missing function as "not deployed" (legacy pull): error code `PGRST202`, or PostgREST's equivalent "Could not find the function" message. A permission, network or server error, or an unparseable value, fails the sync instead of silently falling back.
 
 ### Pull cursor limits and recovery
 
@@ -267,6 +267,12 @@ Account switching (one device):
 2. While signed out, create a transaction. Sign in as account B: that transaction belongs to B, uploads to B (check `transactions` filtered by B's `user_id` in Supabase), and none of A's rows appear in B.
 3. Queue many changes in A (for example offline), go online and sign out then into B while the sync is running. No A rows may be written under B's `user_id`, and B finishes with its own full sync.
 4. Sign back in as A: A's data is intact, and anything A still had pending uploads under A.
+
+First sign-in with signed-out data (one device, account B already has cloud data):
+
+1. While signed out, create an account, a category, a transaction, a budget, a recurring rule and an investment, and delete one extra transaction.
+2. Sign in as B and let the first sync finish. Everything from step 1 stays on the device, now belongs to B, and appears in B's Supabase tables; the deleted transaction is not uploaded. B's existing cloud data appears alongside it.
+3. Repeat with a fresh install that has no local data: B's cloud data replaces the built-in categories and nothing is uploaded.
 
 ## Physical APK verification
 
