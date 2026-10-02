@@ -1,7 +1,7 @@
 import { getRxDatabase } from '@/database';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
-import { coalesceQueue } from '@/utils/syncLogic';
+import { coalesceQueue, normalizeServerTimestamp } from '@/utils/syncLogic';
 import { getCurrentUserId } from '@/database/session';
 import { emptyToNull, ownerId } from '@/database/query';
 import { rxLog } from '@/database/logger';
@@ -21,13 +21,26 @@ function toItem(row: { toMutableJSON: () => import('@/database/types').SyncQueue
   };
 }
 
+/** False when the payload names a different owner, or cannot be read at all. */
+function payloadOwnedBy(payload: string, userId: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    if (!parsed || typeof parsed !== 'object') return false;
+    const owner = (parsed as { userId?: unknown }).userId;
+    return typeof owner !== 'string' || owner === '' || owner === userId;
+  } catch {
+    return false;
+  }
+}
+
 export const syncQueueRepository = {
-  async list(): Promise<SyncQueueItem[]> {
+  /** Outbox of `userId`, or of the current session when omitted. */
+  async list(userId?: string): Promise<SyncQueueItem[]> {
     const db = await getRxDatabase();
-    const userId = getCurrentUserId();
+    const owner = userId ?? getCurrentUserId() ?? '';
     const rows = await db.syncQueue
       .find({
-        selector: { userId: userId ?? '' },
+        selector: { userId: owner },
         sort: [{ createdAt: 'asc' }],
       })
       .exec();
@@ -38,9 +51,11 @@ export const syncQueueRepository = {
     entityType: SyncEntityType,
     entityId: string,
     operation: SyncOperation,
-    payload: unknown
+    payload: unknown,
+    options: { userId?: string } = {}
   ): Promise<void> {
-    const existing = await this.list();
+    const userId = ownerId(options.userId);
+    const existing = await this.list(userId);
     const next = coalesceQueue(existing, {
       entityType,
       entityId,
@@ -50,7 +65,6 @@ export const syncQueueRepository = {
     });
 
     const db = await getRxDatabase();
-    const userId = ownerId();
     const stale = await db.syncQueue
       .find({
         selector: {
@@ -84,6 +98,65 @@ export const syncQueueRepository = {
     const db = await getRxDatabase();
     const row = await db.syncQueue.findOne(id).exec();
     if (row) await row.remove();
+  },
+
+  /**
+   * Remove a pushed entry only if it still holds what was pushed. coalesceQueue reuses the
+   * entry id, so an edit queued while the push was in flight must stay for the next push.
+   */
+  async removeIfUnchanged(item: Pick<SyncQueueItem, 'id' | 'operation' | 'payload'>): Promise<boolean> {
+    const db = await getRxDatabase();
+    const row = await db.syncQueue.findOne(item.id).exec();
+    if (!row || row.payload !== item.payload || row.operation !== item.operation) return false;
+    await row.remove();
+    return true;
+  },
+
+  /** Entity ids of one type still waiting in this account's outbox. */
+  async pendingEntityIds(entityType: SyncEntityType, userId: string): Promise<Set<string>> {
+    const db = await getRxDatabase();
+    const rows = await db.syncQueue.find({ selector: { userId, entityType } }).exec();
+    return new Set(rows.map((row) => row.entityId));
+  },
+
+  /**
+   * Hand outbox entries written without an owner (userId '') to `userId`, but only when the
+   * local entity they describe is owned by `userId` (profile entries: entityId is the user id)
+   * and the payload names no other owner. Entries for anyone else's data stay untouched.
+   * If the account already has an entry for the same entity, the newest one is kept:
+   * every entry is a full snapshot or a tombstone, so the newest supersedes older ones.
+   * Idempotent; a partial failure is retried by the next call.
+   */
+  async claimUnowned(
+    userId: string,
+    ownsEntity: (entityType: SyncEntityType, entityId: string) => Promise<boolean>
+  ): Promise<number> {
+    if (!userId) return 0;
+    const db = await getRxDatabase();
+    const unowned = await db.syncQueue.find({ selector: { userId: '' } }).exec();
+    let claimed = 0;
+    for (const row of unowned) {
+      const entityType = row.entityType as SyncEntityType;
+      const owned = entityType === 'profile' ? row.entityId === userId : await ownsEntity(entityType, row.entityId);
+      if (!owned || !payloadOwnedBy(row.payload, userId)) continue;
+      const mine = await db.syncQueue
+        .find({ selector: { userId, entityType: row.entityType, entityId: row.entityId } })
+        .exec();
+      const newest = mine.reduce((best, candidate) => (candidate.createdAt > best.createdAt ? candidate : best), row);
+      await Promise.all(mine.filter((candidate) => candidate !== newest).map((candidate) => candidate.remove()));
+      if (newest === row) await row.incrementalPatch({ userId });
+      else await row.remove();
+      claimed += 1;
+    }
+    if (claimed) rxLog('sync', 'claim', { count: claimed });
+    return claimed;
+  },
+
+  /** Drop one account's outbox (local data was replaced from the server). Other owners keep theirs. */
+  async clearForUser(userId: string): Promise<void> {
+    const db = await getRxDatabase();
+    const rows = await db.syncQueue.find({ selector: { userId } }).exec();
+    await Promise.all(rows.map((row) => row.remove()));
   },
 
   async markFailure(id: string, error: string, retryCount: number): Promise<void> {
@@ -162,11 +235,15 @@ export const syncCursorRepository = {
       readStamp(PULL_CURSOR_PREFIX + userId),
       readStamp(FULL_PULL_PREFIX + userId),
     ]);
-    return { cursor, lastFullPullAt };
+    // An unreadable stored stamp is treated as missing, which forces a full pull.
+    return { cursor: normalizeServerTimestamp(cursor), lastFullPullAt: normalizeServerTimestamp(lastFullPullAt) };
   },
 
   async save(userId: string, serverTime: string, full: boolean): Promise<void> {
-    await writeStamp(PULL_CURSOR_PREFIX + userId, userId, serverTime);
-    if (full) await writeStamp(FULL_PULL_PREFIX + userId, userId, serverTime);
+    if (!userId) throw new Error('A pull cursor needs a user.');
+    const normalized = normalizeServerTimestamp(serverTime);
+    if (!normalized) throw new Error('Refusing to store an invalid pull cursor.');
+    await writeStamp(PULL_CURSOR_PREFIX + userId, userId, normalized);
+    if (full) await writeStamp(FULL_PULL_PREFIX + userId, userId, normalized);
   },
 };

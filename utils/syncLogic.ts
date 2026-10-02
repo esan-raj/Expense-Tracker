@@ -92,8 +92,51 @@ export function coalesceQueue(
 }
 
 export const FULL_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
-/** Re-reads rows stamped just before the cursor whose transaction committed after the last pull. */
+/**
+ * Re-reads rows stamped just before the cursor whose transaction committed after the last pull.
+ * A server transaction open longer than this can still be skipped by incremental pulls; the
+ * periodic full pull recovers it.
+ */
 export const PULL_CURSOR_OVERLAP_MS = 60 * 1000;
+
+const TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|z|[+-]\d{2}(?::?\d{2})?)$/;
+
+/**
+ * Epoch milliseconds of an ISO-8601 / PostgreSQL timestamptz string, or NaN.
+ * A timezone is required. Parsed explicitly rather than with Date.parse because Postgres
+ * returns microseconds and `+00:00` offsets, which JS engines (including Hermes) do not
+ * all parse the same way. Sub-millisecond digits are truncated.
+ */
+export function parseTimestampMs(value: unknown): number {
+  if (typeof value !== 'string') return NaN;
+  const match = TIMESTAMP_PATTERN.exec(value.trim());
+  if (!match) return NaN;
+  const [, y, mo, d, h, mi, s, fraction = '', zone] = match;
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = Number(h);
+  const minute = Number(mi);
+  const second = Number(s);
+  if (year < 1000 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return NaN;
+  const utc = Date.UTC(year, month - 1, day, hour, minute, second, Number(fraction.slice(0, 3).padEnd(3, '0')));
+  // Date.UTC rolls invalid days (2026-02-30) into the next month.
+  if (new Date(utc).getUTCDate() !== day) return NaN;
+  if (zone === 'Z' || zone === 'z') return utc;
+  const digits = zone.slice(1).replace(':', '');
+  const offsetHours = Number(digits.slice(0, 2));
+  const offsetMinutes = digits.length > 2 ? Number(digits.slice(2)) : 0;
+  if (offsetHours > 23 || offsetMinutes > 59) return NaN;
+  const sign = zone.startsWith('-') ? -1 : 1;
+  return utc - sign * (offsetHours * 60 + offsetMinutes) * 60_000;
+}
+
+/** `toISOString()` form of a valid timestamp, or null for empty or malformed input. */
+export function normalizeServerTimestamp(value: unknown): string | null {
+  const ms = parseTimestampMs(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
 
 export type PullColumn = 'updated_at' | 'server_updated_at';
 
@@ -114,15 +157,21 @@ export interface PullPlan {
 
 export function planPull(input: PullPlanInput): PullPlan {
   if (!input.serverNow) {
-    return { column: 'updated_at', since: input.legacySince, full: !input.legacySince };
+    const legacySince = normalizeServerTimestamp(input.legacySince);
+    return { column: 'updated_at', since: legacySince, full: !legacySince };
   }
-  const serverMs = Date.parse(input.serverNow);
-  const cursorMs = input.cursor ? Date.parse(input.cursor) : NaN;
-  const lastFullMs = input.lastFullPullAt ? Date.parse(input.lastFullPullAt) : NaN;
+  const serverMs = parseTimestampMs(input.serverNow);
+  const cursorMs = parseTimestampMs(input.cursor);
+  const lastFullMs = parseTimestampMs(input.lastFullPullAt);
+  // Stamps ahead of the server clock (restored database, clock reversal, corrupt value)
+  // would skip rows or postpone the periodic full pull, so they force a full pull, which
+  // then stores the current server time.
   const fullDue =
+    !Number.isFinite(serverMs) ||
     !Number.isFinite(cursorMs) ||
     !Number.isFinite(lastFullMs) ||
-    !Number.isFinite(serverMs) ||
+    cursorMs > serverMs ||
+    lastFullMs > serverMs ||
     serverMs - lastFullMs >= FULL_RESYNC_INTERVAL_MS;
   if (fullDue) {
     return { column: 'server_updated_at', since: null, full: true };

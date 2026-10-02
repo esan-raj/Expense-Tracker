@@ -1,6 +1,6 @@
 import { getRxDatabase } from '@/database';
 import { compareValues, enrichTransaction, loadLookups, matchesSearch } from '@/database/helpers';
-import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
+import { emptyToNull, nullToEmpty, ownerId, replacementQuery, scopeSelector, type ReplaceOptions } from '@/database/query';
 import type {
   Transaction,
   TransactionFilters,
@@ -366,12 +366,12 @@ export const transactionRepository = {
     ).map((row) => mapTransaction(enrichTransaction([], [], row)));
   },
 
-  async replaceAll(items: Transaction[]): Promise<void> {
+  async replaceAll(items: Transaction[], options: ReplaceOptions = {}): Promise<void> {
     const db = await getRxDatabase();
-    const current = await db.transactions.find().exec();
+    const current = await db.transactions.find(replacementQuery(options)).exec();
     await Promise.all(current.map((row) => row.remove()));
     if (!items.length) return;
-    const userId = ownerId();
+    const userId = options.ownerId ?? ownerId();
     await db.transactions.bulkInsert(
       items.map((item) => ({
         id: item.id,

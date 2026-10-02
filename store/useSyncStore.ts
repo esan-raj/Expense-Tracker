@@ -24,6 +24,8 @@ let statusSubscribed = false;
 /** Resolves once the app-lifetime NetInfo listener and local-change handler are installed. */
 let networkStart: Promise<void> | null = null;
 let syncNowPromise: Promise<void> | null = null;
+/** Account signed in when the in-flight syncNow started. */
+let syncNowUserId: string | null = null;
 /** A local write arrived while syncNow was already past the point of picking it up. */
 let localChangeDuringSync = false;
 
@@ -103,7 +105,13 @@ export const useSyncStore = create<SyncStoreState>((set, get) => {
       }
     },
     syncNow: () => {
+      const userId = getCurrentUserId();
+      if (syncNowPromise && userId && userId !== syncNowUserId) {
+        // Another account signed in mid-sync: the gate queues one full sync for it.
+        void syncService.performFullSync().catch((error) => logError('sync.account-change', error));
+      }
       if (!syncNowPromise) {
+        syncNowUserId = userId;
         syncNowPromise = Promise.resolve()
           .then(async () => {
             await syncService.performFullSync();
@@ -113,6 +121,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => {
           })
           .finally(() => {
             syncNowPromise = null;
+            syncNowUserId = null;
             if (localChangeDuringSync) {
               localChangeDuringSync = false;
               requestLocalChangeSync();

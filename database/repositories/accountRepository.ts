@@ -1,6 +1,6 @@
 import { getRxDatabase } from '@/database';
 import { compareValues } from '@/database/helpers';
-import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
+import { emptyToNull, nullToEmpty, ownerId, replacementQuery, scopeSelector, type ReplaceOptions } from '@/database/query';
 import type { Account, AccountInput } from '@/types';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
@@ -131,12 +131,12 @@ export const accountRepository = {
     await Promise.all(rows.map((row) => row.incrementalPatch({ userId })));
   },
 
-  async replaceAll(items: Account[]): Promise<void> {
+  async replaceAll(items: Account[], options: ReplaceOptions = {}): Promise<void> {
     const db = await getRxDatabase();
-    const current = await db.accounts.find().exec();
+    const current = await db.accounts.find(replacementQuery(options)).exec();
     await Promise.all(current.map((row) => row.remove()));
     if (!items.length) return;
-    const userId = ownerId();
+    const userId = options.ownerId ?? ownerId();
     await db.accounts.bulkInsert(
       items.map((item) => ({
         id: item.id,

@@ -1,7 +1,7 @@
 import NetInfo from '@react-native-community/netinfo';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
-import { remoteApi } from '@/services/supabase/remote';
+import { remoteApi, type ServerTransaction } from '@/services/supabase/remote';
 import { transactionRepository } from '@/database/repositories/transactionRepository';
 import { categoryRepository } from '@/database/repositories/categoryRepository';
 import { budgetRepository } from '@/database/repositories/budgetRepository';
@@ -9,6 +9,11 @@ import { recurringRepository } from '@/database/repositories/recurringRepository
 import { accountRepository } from '@/database/repositories/accountRepository';
 import { investmentRepository } from '@/database/repositories/investmentRepository';
 import { settingsRepository } from '@/database/repositories/settingsRepository';
+import {
+  OWNED_ENTITY_TYPES,
+  ownershipRepository,
+  type OwnedEntityType,
+} from '@/database/repositories/ownershipRepository';
 import {
   syncCursorRepository,
   syncQueueRepository,
@@ -24,6 +29,14 @@ import { nowIso } from '@/utils/dates';
 import type { SyncStatus } from '@/types/sync';
 import { bumpFinanceRevision } from '@/services/financeRevision';
 import { syncGate } from '@/services/syncSingleFlight';
+import {
+  assertSyncSession,
+  captureSyncContext,
+  SyncSessionChangedError,
+  type SyncContext,
+} from '@/services/syncSession';
+
+type RemoteEntity = 'transaction' | 'category' | 'budget' | 'recurring' | 'account' | 'investment';
 
 let realtimeChannel: RealtimeChannel | null = null;
 let listeners: Array<(status: SyncStatus, lastSyncedAt: string | null, pending: number) => void> = [];
@@ -65,7 +78,7 @@ async function isOnline(): Promise<boolean> {
 }
 
 async function applyRemoteRecord(
-  entity: 'transaction' | 'category' | 'budget' | 'recurring' | 'account' | 'investment',
+  entity: RemoteEntity,
   remote: { id: string; updatedAt: string; deletedAt?: string | null }
 ) {
   const local =
@@ -100,6 +113,52 @@ async function applyRemoteRecord(
   bumpFinanceRevision();
 }
 
+async function applyRemoteRecords(
+  context: SyncContext,
+  entity: RemoteEntity,
+  items: ReadonlyArray<{ id: string; updatedAt: string; deletedAt?: string | null }>
+): Promise<void> {
+  for (const item of items) {
+    assertSyncSession(context);
+    await applyRemoteRecord(entity, item);
+  }
+}
+
+function loadClaimSnapshot(entityType: OwnedEntityType, id: string): Promise<object | null> {
+  switch (entityType) {
+    case 'transaction':
+      return transactionRepository.getByIdIncludingDeleted(id);
+    case 'category':
+      return categoryRepository.getByIdIncludingDeleted(id);
+    case 'budget':
+      return budgetRepository.getByIdIncludingDeleted(id);
+    case 'recurring':
+      return recurringRepository.getByIdIncludingDeleted(id);
+    case 'account':
+      return accountRepository.getByIdIncludingDeleted(id);
+    case 'investment':
+      return investmentRepository.getByIdIncludingDeleted(id);
+  }
+}
+
+/**
+ * Converge the local copy of a generated occurrence on the server copy that won, unless the
+ * row changed again after this upload was queued: that newer edit has its own outbox entry.
+ */
+async function adoptServerOccurrence(
+  context: SyncContext,
+  pushed: { updatedAt?: string; deletedAt?: string | null },
+  remote: ServerTransaction
+): Promise<void> {
+  const local = await transactionRepository.getByIdIncludingDeleted(remote.id);
+  if (local && (local.updatedAt !== pushed.updatedAt || (local.deletedAt ?? null) !== (pushed.deletedAt ?? null))) {
+    return;
+  }
+  assertSyncSession(context);
+  await transactionRepository.upsertFromRemote(remote);
+  bumpFinanceRevision();
+}
+
 export const syncService = {
   async claimLocalData(userId: string): Promise<void> {
     await this.claimUnassigned(userId);
@@ -109,17 +168,37 @@ export const syncService = {
     await this.queueExistingLocal();
   },
 
-  /** Claim unowned local rows without re-enqueueing the entire dataset. */
+  /**
+   * Claim rows written while no account was signed in, without re-enqueueing the whole dataset.
+   * queueChange skips the outbox without a session, so each active row is queued for this
+   * account before it is claimed: if claiming fails, the row is still unassigned and is queued
+   * again (coalesced) next time. Built-in categories are not queued; ensurePushDependencies
+   * uploads them once something references them. Outbox entries left without an owner are
+   * then handed over only for entities this account now owns.
+   */
   async claimUnassigned(userId: string): Promise<void> {
     setCurrentUserId(userId);
-    await Promise.all([
-      transactionRepository.claimUnassigned(userId),
-      categoryRepository.claimUnassigned(userId),
-      budgetRepository.claimUnassigned(userId),
-      recurringRepository.claimUnassigned(userId),
-      accountRepository.claimUnassigned(userId),
-      investmentRepository.claimUnassigned(userId),
-    ]);
+    for (const entityType of OWNED_ENTITY_TYPES) {
+      const unassigned = await ownershipRepository.listUnassigned(entityType);
+      if (!unassigned.length) continue;
+      for (const row of unassigned) {
+        if (row.deletedAt || row.isDefault) continue;
+        const snapshot = await loadClaimSnapshot(entityType, row.id);
+        if (!snapshot) continue;
+        if (getCurrentUserId() !== userId) throw new SyncSessionChangedError();
+        await syncQueueRepository.enqueue(entityType, row.id, 'update', snapshot, { userId });
+      }
+      await ownershipRepository.claim(
+        entityType,
+        unassigned.map((row) => row.id),
+        userId
+      );
+    }
+    await syncQueueRepository.claimUnowned(
+      userId,
+      async (entityType, entityId) =>
+        entityType !== 'profile' && (await ownershipRepository.ownerOf(entityType, entityId)) === userId
+    );
     await syncStateRepository.save({ userId });
   },
 
@@ -127,13 +206,14 @@ export const syncService = {
    * Ensure categories/accounts referenced by pending transactions (etc.) are in the outbox
    * before those dependents are pushed — prevents remote FK 23503 failures.
    */
-  async ensurePushDependencies(): Promise<void> {
-    const userId = getCurrentUserId();
-    if (!userId) return;
+  async ensurePushDependencies(context?: SyncContext): Promise<void> {
+    const ctx = context ?? captureSyncContext();
+    if (!ctx) return;
+    assertSyncSession(ctx);
 
-    await this.claimUnassigned(userId);
+    await this.claimUnassigned(ctx.userId);
 
-    const queue = await syncQueueRepository.list();
+    const queue = await syncQueueRepository.list(ctx.userId);
     const refs = collectSyncDependencyRefs(queue);
     const missingCategories = missingDependencyIds(refs.categoryIds, queue, 'category');
     const missingAccounts = missingDependencyIds(refs.accountIds, queue, 'account');
@@ -141,14 +221,14 @@ export const syncService = {
     for (const categoryId of missingCategories) {
       const category = await categoryRepository.getByIdIncludingDeleted(categoryId);
       if (!category) continue;
-      await syncQueueRepository.enqueue('category', categoryId, 'update', category);
+      await syncQueueRepository.enqueue('category', categoryId, 'update', category, { userId: ctx.userId });
       syncLog(`queued missing category dependency ${categoryId.slice(0, 8)}…`);
     }
 
     for (const accountId of missingAccounts) {
       const account = await accountRepository.getByIdIncludingDeleted(accountId);
       if (!account) continue;
-      await syncQueueRepository.enqueue('account', accountId, 'update', account);
+      await syncQueueRepository.enqueue('account', accountId, 'update', account, { userId: ctx.userId });
       syncLog(`queued missing account dependency ${accountId.slice(0, 8)}…`);
     }
   },
@@ -176,15 +256,18 @@ export const syncService = {
     ]);
   },
 
-  async pushLocalChanges(): Promise<void> {
-    if (!isSupabaseConfigured() || !getCurrentUserId()) return;
-    await this.ensurePushDependencies();
-    const queue = sortQueueForPush(await syncQueueRepository.list());
+  async pushLocalChanges(context?: SyncContext): Promise<void> {
+    const ctx = context ?? captureSyncContext();
+    if (!isSupabaseConfigured() || !ctx) return;
+    await this.ensurePushDependencies(ctx);
+    const queue = sortQueueForPush(await syncQueueRepository.list(ctx.userId));
     syncLog('starting push');
     for (const item of queue) {
+      // Remote writes stamp the session's user id, so an entry of a previous account must never be sent.
+      assertSyncSession(ctx);
       try {
         syncEntityLog(item.entityType, 'push', item.operation);
-        const payload = JSON.parse(item.payload) as { id?: string; deletedAt?: string };
+        const payload = JSON.parse(item.payload) as { id?: string; deletedAt?: string; updatedAt?: string };
         if (item.operation === 'delete') {
           const deletedAt = payload.deletedAt ?? nowIso();
           if (item.entityType === 'transaction') await remoteApi.deleteTransaction(item.entityId, deletedAt);
@@ -195,9 +278,8 @@ export const syncService = {
           if (item.entityType === 'investment') await remoteApi.deleteInvestment(item.entityId, deletedAt);
         } else if (item.entityType === 'transaction' && isGeneratedOccurrence(payload)) {
           const result = await remoteApi.insertGeneratedTransaction(payload as never);
-          if (result === 'deleted_remotely') {
-            await transactionRepository.delete(item.entityId);
-            bumpFinanceRevision();
+          if (result.outcome === 'kept_remote' || result.outcome === 'deleted_remotely') {
+            await adoptServerOccurrence(ctx, payload, result.remote);
           }
         } else {
           if (item.entityType === 'transaction') await remoteApi.upsertTransaction(payload as never);
@@ -208,9 +290,10 @@ export const syncService = {
           if (item.entityType === 'investment') await remoteApi.upsertInvestment(payload as never);
           if (item.entityType === 'profile') await remoteApi.upsertProfile(payload as never);
         }
-        await syncQueueRepository.remove(item.id);
+        await syncQueueRepository.removeIfUnchanged(item);
         syncEntityLog(item.entityType, 'push', 'complete');
       } catch (error) {
+        if (error instanceof SyncSessionChangedError) throw error;
         logError(`sync[${item.entityType}][${item.operation}]`, error);
         const nextRetry = item.retryCount + 1;
         await syncQueueRepository.markFailure(item.id, getErrorMessage(error, 'Sync failed'), nextRetry);
@@ -235,8 +318,13 @@ export const syncService = {
     return !locals.some((item) => remoteIds.has(item.id));
   },
 
-  async replaceLocalFromRemote(): Promise<void> {
-    const userId = getCurrentUserId();
+  /**
+   * Replace this account's local rows and outbox with the server's. Rows and outboxes of other
+   * accounts on the device are untouched, and the cursor is stored only for this account.
+   */
+  async replaceLocalFromRemote(context?: SyncContext): Promise<void> {
+    const ctx = context ?? captureSyncContext();
+    if (!ctx) return;
     const serverNow = await remoteApi.serverTime();
     const [transactions, categories, budgets, recurring, accounts, investments] = await Promise.all([
       remoteApi.pullTransactions(null),
@@ -246,16 +334,22 @@ export const syncService = {
       remoteApi.pullAccounts(null),
       remoteApi.pullInvestments(null),
     ]);
-    await accountRepository.replaceAll(accounts.filter((item) => !item.deletedAt));
-    await investmentRepository.replaceAll(investments.filter((item) => !item.deletedAt));
-    await categoryRepository.replaceAll(categories.filter((item) => !item.deletedAt));
-    await recurringRepository.replaceAll(recurring.filter((item) => !item.deletedAt));
-    await transactionRepository.replaceAll(transactions.filter((item) => !item.deletedAt));
-    await budgetRepository.replaceAll(budgets.filter((item) => !item.deletedAt));
-    await syncQueueRepository.clear();
+    assertSyncSession(ctx);
+    const scope = { ownerId: ctx.userId };
+    await accountRepository.replaceAll(accounts.filter((item) => !item.deletedAt), scope);
+    await investmentRepository.replaceAll(investments.filter((item) => !item.deletedAt), scope);
+    await categoryRepository.replaceAll(categories.filter((item) => !item.deletedAt), scope);
+    await recurringRepository.replaceAll(recurring.filter((item) => !item.deletedAt), scope);
+    await transactionRepository.replaceAll(transactions.filter((item) => !item.deletedAt), scope);
+    await budgetRepository.replaceAll(budgets.filter((item) => !item.deletedAt), scope);
+    await syncQueueRepository.clearForUser(ctx.userId);
+    assertSyncSession(ctx);
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
-    if (userId && serverNow) await syncCursorRepository.save(userId, serverNow, true);
+    if (serverNow) {
+      assertSyncSession(ctx);
+      await syncCursorRepository.save(ctx.userId, serverNow, true);
+    }
     bumpFinanceRevision();
   },
 
@@ -270,29 +364,24 @@ export const syncService = {
   async startRealtime(userId: string, onChange: () => void): Promise<void> {
     this.stopRealtime();
     if (!isSupabaseConfigured()) return;
+    const onRemoteChange = () => {
+      // A previous account's channel can still deliver events until it is removed.
+      if (getCurrentUserId() !== userId) return;
+      void this.pullRemoteChanges()
+        .then(onChange)
+        .catch((error) => logError('sync.realtime', error));
+    };
     realtimeChannel = supabase
       .channel(`spendwise-${userId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${userId}` }, () => {
-        void this.pullRemoteChanges().then(onChange);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'budgets', filter: `user_id=eq.${userId}` }, () => {
-        void this.pullRemoteChanges().then(onChange);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories', filter: `user_id=eq.${userId}` }, () => {
-        void this.pullRemoteChanges().then(onChange);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts', filter: `user_id=eq.${userId}` }, () => {
-        void this.pullRemoteChanges().then(onChange);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'investments', filter: `user_id=eq.${userId}` }, () => {
-        void this.pullRemoteChanges().then(onChange);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${userId}` }, onRemoteChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'budgets', filter: `user_id=eq.${userId}` }, onRemoteChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories', filter: `user_id=eq.${userId}` }, onRemoteChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts', filter: `user_id=eq.${userId}` }, onRemoteChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investments', filter: `user_id=eq.${userId}` }, onRemoteChange)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'recurring_transactions', filter: `user_id=eq.${userId}` },
-        () => {
-          void this.pullRemoteChanges().then(onChange);
-        }
+        onRemoteChange
       )
       .subscribe();
   },
@@ -312,14 +401,14 @@ export const syncService = {
  */
 export async function reconcileCategoriesAfterFullPull(
   userId: string,
-  remoteCategories: ReadonlyArray<{ id: string }>
+  remoteCategories: ReadonlyArray<{ id: string }>,
+  context?: SyncContext
 ): Promise<string[]> {
-  const [owned, queue] = await Promise.all([
+  const [owned, pendingIds] = await Promise.all([
     categoryRepository.listActiveOwnedBy(userId),
-    syncQueueRepository.list(),
+    syncQueueRepository.pendingEntityIds('category', userId),
   ]);
   const remoteIds = new Set(remoteCategories.map((item) => item.id));
-  const pendingIds = new Set(queue.filter((item) => item.entityType === 'category').map((item) => item.entityId));
   const referencedIds = new Set<string>();
   const candidates = findStaleCategoryIds({ owned, remoteIds, pendingIds, referencedIds });
   for (const id of candidates) {
@@ -331,19 +420,46 @@ export async function reconcileCategoriesAfterFullPull(
     if (transactions + recurring + budgets > 0) referencedIds.add(id);
   }
   const stale = findStaleCategoryIds({ owned, remoteIds, pendingIds, referencedIds });
-  for (const id of stale) await categoryRepository.hide(id);
+  for (const id of stale) {
+    if (context) assertSyncSession(context);
+    await categoryRepository.hide(id);
+  }
   if (stale.length) syncLog(`full pull hid ${stale.length} categories missing on the server`);
   return stale;
 }
 
 async function runGatedSync(kind: 'pull' | 'full'): Promise<void> {
-  if (kind === 'full') await executeFullSync();
-  else await executePullRemoteChanges();
+  try {
+    if (kind === 'full') {
+      await executeFullSync();
+      return;
+    }
+    const context = captureSyncContext();
+    if (context) await executePullRemoteChanges(context);
+  } catch (error) {
+    if (!(error instanceof SyncSessionChangedError)) throw error;
+    await restartAfterSessionChange();
+  }
 }
 
-async function executePullRemoteChanges(): Promise<void> {
-  const userId = getCurrentUserId();
-  if (!isSupabaseConfigured() || !userId) return;
+/**
+ * A run stopped because the account changed. It reports nothing for the new account: one full
+ * sync is queued for whoever is signed in now (the gate merges it with any request that
+ * account already made), or the status goes offline when nobody is signed in.
+ */
+async function restartAfterSessionChange(): Promise<void> {
+  syncLog('account changed during sync; stale run stopped');
+  if (getCurrentUserId()) {
+    syncGate.requestFollowUp('full');
+    return;
+  }
+  await syncStateRepository.save({ status: 'offline' });
+  emit('offline', (await syncStateRepository.get()).lastSyncedAt, await syncQueueRepository.count());
+}
+
+async function executePullRemoteChanges(context: SyncContext): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const { userId } = context;
   const state = await syncStateRepository.get();
   const legacySince = state.lastSyncedAt;
   const serverNow = await remoteApi.serverTime();
@@ -361,17 +477,19 @@ async function executePullRemoteChanges(): Promise<void> {
     remoteApi.pullProfile(),
   ]);
 
-  for (const item of accounts) await applyRemoteRecord('account', item);
-  for (const item of investments) await applyRemoteRecord('investment', item);
-  for (const item of categories) await applyRemoteRecord('category', item);
-  for (const item of recurring) await applyRemoteRecord('recurring', item);
-  for (const item of transactions) await applyRemoteRecord('transaction', item);
-  for (const item of budgets) await applyRemoteRecord('budget', item);
+  await applyRemoteRecords(context, 'account', accounts);
+  await applyRemoteRecords(context, 'investment', investments);
+  await applyRemoteRecords(context, 'category', categories);
+  await applyRemoteRecords(context, 'recurring', recurring);
+  await applyRemoteRecords(context, 'transaction', transactions);
+  await applyRemoteRecords(context, 'budget', budgets);
 
   if (plan.full) {
-    await reconcileCategoriesAfterFullPull(userId, categories);
+    assertSyncSession(context);
+    await reconcileCategoriesAfterFullPull(userId, categories, context);
   }
   if (plan.full || categories.length > 0) {
+    assertSyncSession(context);
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
     await categoryDedupeService.apply();
   }
@@ -384,6 +502,7 @@ async function executePullRemoteChanges(): Promise<void> {
   syncEntityLog('investment', 'pull', String(investments.length));
 
   if (profile) {
+    assertSyncSession(context);
     await settingsRepository.update({
       currency: profile.currency,
       currencySymbol: profile.currency_symbol,
@@ -393,7 +512,10 @@ async function executePullRemoteChanges(): Promise<void> {
       onboardingComplete: profile.onboarding_completed,
     });
   }
-  if (serverNow) await syncCursorRepository.save(userId, serverNow, plan.full);
+  if (serverNow) {
+    assertSyncSession(context);
+    await syncCursorRepository.save(userId, serverNow, plan.full);
+  }
   syncLog('pull complete');
 }
 
@@ -420,20 +542,24 @@ async function executeFullSync(): Promise<void> {
     return;
   }
 
+  const context: SyncContext = { userId };
   emit('syncing', (await syncStateRepository.get()).lastSyncedAt, pending);
   await syncStateRepository.save({ status: 'syncing', lastError: null });
   try {
+    assertSyncSession(context);
     if (await syncService.shouldReplaceLocalFromRemote()) {
-      await syncService.replaceLocalFromRemote();
+      await syncService.replaceLocalFromRemote(context);
     } else {
-      await syncService.pushLocalChanges();
-      await executePullRemoteChanges();
+      await syncService.pushLocalChanges(context);
+      await executePullRemoteChanges(context);
     }
+    assertSyncSession(context);
     const syncedAt = nowIso();
     await syncStateRepository.save({ lastSyncedAt: syncedAt, status: 'synced', lastError: null });
     emit('synced', syncedAt, await syncQueueRepository.count());
     syncLog('idle');
   } catch (error) {
+    if (error instanceof SyncSessionChangedError) throw error;
     logError('sync.full', error);
     await syncStateRepository.save({
       status: 'error',

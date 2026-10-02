@@ -13,15 +13,21 @@ const remote = {
   pullProfile: jest.fn(async () => null),
 };
 const queue = {
-  list: jest.fn(async (): Promise<unknown[]> => []),
-  remove: jest.fn(async () => undefined),
+  list: jest.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
+  removeIfUnchanged: jest.fn(async (..._args: unknown[]) => true),
   markFailure: jest.fn(async () => undefined),
+  enqueue: jest.fn(async () => undefined),
+  claimUnowned: jest.fn(async () => 0),
 };
 const cursors = {
   get: jest.fn(),
   save: jest.fn(async () => undefined),
 };
-const txRepo = { delete: jest.fn(async () => undefined), getByIdIncludingDeleted: jest.fn() };
+const txRepo = {
+  delete: jest.fn(async () => undefined),
+  getByIdIncludingDeleted: jest.fn(),
+  upsertFromRemote: jest.fn(async (..._args: unknown[]) => undefined),
+};
 const emptyRepo = { claimUnassigned: jest.fn(async () => undefined), getByIdIncludingDeleted: jest.fn() };
 
 jest.mock('@react-native-community/netinfo', () => ({ __esModule: true, default: { fetch: jest.fn() } }));
@@ -62,6 +68,14 @@ jest.mock('@/database/repositories/investmentRepository', () => ({
   },
 }));
 jest.mock('@/database/repositories/settingsRepository', () => ({ settingsRepository: { update: jest.fn() } }));
+jest.mock('@/database/repositories/ownershipRepository', () => ({
+  OWNED_ENTITY_TYPES: ['category', 'account', 'investment', 'recurring', 'transaction', 'budget'],
+  ownershipRepository: {
+    listUnassigned: jest.fn(async () => []),
+    claim: jest.fn(async () => []),
+    ownerOf: jest.fn(async () => null),
+  },
+}));
 jest.mock('@/database/repositories/syncQueueRepository', () => ({
   get syncQueueRepository() {
     return queue;
@@ -126,16 +140,20 @@ describe('generated recurring occurrence push', () => {
     jest.clearAllMocks();
   });
 
-  it('uploads insert-only and applies a remote delete locally instead of resurrecting it', async () => {
-    queue.list.mockResolvedValue([item({ id, recurringId: 'rule-1', date: '2026-09-30' })]);
-    remote.insertGeneratedTransaction.mockResolvedValue('deleted_remotely');
+  it('uploads insert-only and converges on a remote tombstone instead of resurrecting it', async () => {
+    const stamp = '2026-09-30T18:00:00.000Z';
+    const payload = { id, recurringId: 'rule-1', date: '2026-09-30', createdAt: stamp, updatedAt: stamp };
+    const tombstone = { ...payload, updatedAt: '2026-09-30T19:00:00.000Z', deletedAt: '2026-09-30T19:00:00.000Z' };
+    queue.list.mockResolvedValue([item(payload)]);
+    txRepo.getByIdIncludingDeleted.mockResolvedValue({ ...payload, deletedAt: null });
+    remote.insertGeneratedTransaction.mockResolvedValue({ outcome: 'deleted_remotely', remote: tombstone });
 
     await syncService.pushLocalChanges();
 
     expect(remote.insertGeneratedTransaction).toHaveBeenCalled();
     expect(remote.upsertTransaction).not.toHaveBeenCalled();
-    expect(txRepo.delete).toHaveBeenCalledWith(id);
-    expect(queue.remove).toHaveBeenCalledWith('q1');
+    expect(txRepo.upsertFromRemote).toHaveBeenCalledWith(tombstone);
+    expect(queue.removeIfUnchanged).toHaveBeenCalledWith(expect.objectContaining({ id: 'q1' }));
   });
 
   it('uses a normal upsert for transactions without a derived id', async () => {

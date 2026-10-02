@@ -1,6 +1,6 @@
 import { getRxDatabase } from '@/database';
 import { enrichRecurring, loadLookups } from '@/database/helpers';
-import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
+import { emptyToNull, nullToEmpty, ownerId, replacementQuery, scopeSelector, type ReplaceOptions } from '@/database/query';
 import type { RecurringInput, RecurringTransaction, RecurringTransactionWithCategory } from '@/types';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
@@ -121,12 +121,12 @@ export const recurringRepository = {
     return rows.map((row) => mapRecurring({ ...row.toMutableJSON(), accountId: emptyToNull(row.accountId) }));
   },
 
-  async replaceAll(items: RecurringTransaction[]): Promise<void> {
+  async replaceAll(items: RecurringTransaction[], options: ReplaceOptions = {}): Promise<void> {
     const db = await getRxDatabase();
-    const current = await db.recurring.find().exec();
+    const current = await db.recurring.find(replacementQuery(options)).exec();
     await Promise.all(current.map((row) => row.remove()));
     if (!items.length) return;
-    const userId = ownerId();
+    const userId = options.ownerId ?? ownerId();
     await db.recurring.bulkInsert(
       items.map((item) => ({
         ...item,

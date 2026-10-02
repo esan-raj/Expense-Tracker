@@ -22,7 +22,7 @@ const counts = {
   recurring: jest.fn(async (..._args: unknown[]) => 0),
   budgets: jest.fn(async (..._args: unknown[]) => 0),
 };
-const queue = { list: jest.fn(async (): Promise<unknown[]> => []) };
+const queue = { pendingEntityIds: jest.fn(async (..._args: unknown[]): Promise<Set<string>> => new Set()) };
 const cursors = { get: jest.fn(), save: jest.fn(async (..._args: unknown[]) => undefined) };
 const syncState = { get: jest.fn() };
 const dedupe = { apply: jest.fn(async () => undefined) };
@@ -146,7 +146,7 @@ describe('full-pull category reconciliation', () => {
     categories.listActiveOwnedBy.mockResolvedValue([]);
     categories.getByIdIncludingDeleted.mockResolvedValue(null);
     remote.pullCategories.mockResolvedValue([]);
-    queue.list.mockResolvedValue([]);
+    queue.pendingEntityIds.mockResolvedValue(new Set());
     counts.transactions.mockResolvedValue(0);
     counts.recurring.mockResolvedValue(0);
     counts.budgets.mockResolvedValue(0);
@@ -222,10 +222,11 @@ describe('full-pull category reconciliation', () => {
   it('keeps categories still waiting in the outbox (created locally, not yet uploaded)', async () => {
     useFullServerPull();
     categories.listActiveOwnedBy.mockResolvedValue([{ id: 'new-local', isDefault: false }]);
-    queue.list.mockResolvedValue([{ entityType: 'category', entityId: 'new-local', operation: 'create' }]);
+    queue.pendingEntityIds.mockResolvedValue(new Set(['new-local']));
 
     await syncService.pullRemoteChanges();
 
+    expect(queue.pendingEntityIds).toHaveBeenCalledWith('category', 'u1');
     expect(categories.hide).not.toHaveBeenCalled();
   });
 
