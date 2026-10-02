@@ -4,6 +4,7 @@ import { authService } from '@/services/authService';
 import { syncService } from '@/services/syncService';
 import { syncStateRepository } from '@/database/repositories/syncQueueRepository';
 import { setCurrentUserId, setScopedUserId } from '@/database/session';
+import { captureSyncContext } from '@/services/syncSession';
 
 interface AuthState {
   user: User | null;
@@ -20,7 +21,7 @@ interface AuthState {
 
 let cloudConnected = false;
 
-export const useAuthStore = create<AuthState>((set, get) => ({
+export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   session: null,
   hydrated: false,
@@ -69,14 +70,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       session = null;
     }
 
-    const user = session?.user ?? get().user;
     if (session?.user) {
       setCurrentUserId(session.user.id);
       set({ session, user: session.user });
     }
-    if (user?.id) {
+    const context = captureSyncContext();
+    if (context) {
       try {
-        await syncService.claimUnassigned(user.id);
+        await syncService.claimUnassigned(context);
       } catch {
         // Local claim can retry on the next sync.
       }
@@ -85,7 +86,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signIn: async (email, password) => {
     const session = await authService.signIn(email, password);
     setCurrentUserId(session.user.id);
-    await syncService.claimLocalData(session.user.id);
+    const context = captureSyncContext();
+    if (context) await syncService.claimLocalData(context);
     set({ session, user: session.user });
   },
   signUp: async (email, password) => {
@@ -93,7 +95,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const session = await authService.getSession();
     if (session?.user) {
       setCurrentUserId(session.user.id);
-      await syncService.claimLocalData(session.user.id);
+      const context = captureSyncContext();
+      if (context) await syncService.claimLocalData(context);
       set({ session, user: session.user });
       return;
     }

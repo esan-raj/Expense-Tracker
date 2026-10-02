@@ -29,6 +29,7 @@ import { ownershipRepository } from '@/database/repositories/ownershipRepository
 import { syncQueueRepository } from '@/database/repositories/syncQueueRepository';
 import { syncService } from '@/services/syncService';
 import { syncGate } from '@/services/syncSingleFlight';
+import { captureSyncContext } from '@/services/syncSession';
 
 const T0 = '2026-10-01T08:00:00.000Z';
 
@@ -118,6 +119,12 @@ async function queueRows() {
   return rows.map((row) => row.toMutableJSON());
 }
 
+/** Claim for a signed-in session, the way the auth layer and sync do. */
+function claimAs(userId: string) {
+  setCurrentUserId(userId);
+  return syncService.claimUnassigned(captureSyncContext()!);
+}
+
 async function ownerOf(collection: 'categories' | 'accounts' | 'transactions', id: string) {
   const db = await getRxDatabase();
   const row = await db[collection].findOne(id).exec();
@@ -177,12 +184,12 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       return realClaim(type, ids, userId);
     });
 
-    await expect(syncService.claimUnassigned('user-a')).rejects.toThrow('storage unavailable');
+    await expect(claimAs('user-a')).rejects.toThrow('storage unavailable');
     expect(await ownerOf('transactions', 't-local')).toBe('');
     expect((await syncQueueRepository.list('user-a')).map((item) => item.entityId).sort()).toEqual(['c-local', 't-local']);
 
     claim.mockRestore();
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     expect(await ownerOf('transactions', 't-local')).toBe('user-a');
     const entries = await syncQueueRepository.list('user-a');
@@ -194,9 +201,9 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
     await db.categories.insert(category('c-local', ''));
     await db.accounts.insert(account('a-local', ''));
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
     const first = await queueRows();
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
     const second = await queueRows();
 
     expect(first).toHaveLength(2);
@@ -209,7 +216,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
     expect(defaults.length).toBeGreaterThan(0);
     await db.categories.insert(category('c-hidden', '', { deletedAt: '2026-10-01T09:00:00.000Z' }));
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     expect(await ownerOf('categories', defaults[0].id)).toBe('user-a');
     expect(await ownerOf('categories', 'c-hidden')).toBe('user-a');
@@ -223,7 +230,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       queueRow('q-race', '', 'category', 'c-mine', { id: 'c-mine', name: 'Groceries' }, { retryCount: 2, lastError: 'timeout' })
     );
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     expect(await queueRows()).toEqual([
       expect.objectContaining({ id: 'q-race', userId: 'user-a', retryCount: 2, lastError: 'timeout' }),
@@ -244,7 +251,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       queueRow('q-garbage', '', 'category', 'c-mine-2', '{not json'),
     ]);
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     const rows = await queueRows();
     expect(rows.map((row) => [row.id, row.userId]).sort()).toEqual([
@@ -265,7 +272,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       queueRow('q-mine-old', 'user-a', 'category', 'c-newer-orphan', { id: 'c-newer-orphan', name: 'old' }),
     ]);
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     const rows = await queueRows();
     expect(rows.map((row) => [row.id, row.userId]).sort()).toEqual([
@@ -281,7 +288,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
       queueRow('q-profile-b', '', 'profile', 'user-b', { currency: 'USD' }),
     ]);
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     const rows = await queueRows();
     expect(rows.map((row) => [row.id, row.userId]).sort()).toEqual([
@@ -293,7 +300,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
   it('after sign-out, a second account claims only rows written since, never the first account’s data', async () => {
     const db = await getRxDatabase();
     await db.categories.insert(category('c-first', ''));
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
     const firstQueue = await syncQueueRepository.list('user-a');
 
     setCurrentUserId(null);
@@ -314,7 +321,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
     await db.categories.insert(category('c-theirs', 'user-b', { updatedAt: '2026-10-01T09:30:00.000Z' }));
 
     expect(await ownershipRepository.claim('category', ['c-theirs'], 'user-a')).toEqual([]);
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     const row = await db.categories.findOne('c-theirs').exec();
     expect(row?.userId).toBe('user-b');
@@ -328,7 +335,7 @@ describe('claiming signed-out data and ownerless outbox entries', () => {
     await db.transactions.insert(transaction('t-local', ''));
     const before = { categories: await db.categories.count().exec(), transactions: await db.transactions.count().exec() };
 
-    await syncService.claimUnassigned('user-a');
+    await claimAs('user-a');
 
     expect(await db.categories.count().exec()).toBe(before.categories);
     expect(await db.transactions.count().exec()).toBe(before.transactions);

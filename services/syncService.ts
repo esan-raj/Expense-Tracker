@@ -19,7 +19,7 @@ import {
   syncQueueRepository,
   syncStateRepository,
 } from '@/database/repositories/syncQueueRepository';
-import { getCurrentUserId, setCurrentUserId } from '@/database/session';
+import { getCurrentUserId } from '@/database/session';
 import { planPull, resolveConflict, shouldRetry, sortQueueForPush } from '@/utils/syncLogic';
 import { recurringOccurrenceId } from '@/utils/deterministicId';
 import { findStaleCategoryIds } from '@/utils/categoryReconciliation';
@@ -160,45 +160,61 @@ async function adoptServerOccurrence(
 }
 
 export const syncService = {
-  async claimLocalData(userId: string): Promise<void> {
-    await this.claimUnassigned(userId);
-    await syncStateRepository.save({ userId });
+  async claimLocalData(context: SyncContext): Promise<void> {
+    await this.claimUnassigned(context);
+    assertSyncSession(context);
+    await syncStateRepository.save({ userId: context.userId });
     const { categoryDedupeService } = await import('@/services/categoryDedupeService');
+    assertSyncSession(context);
     await categoryDedupeService.apply();
+    assertSyncSession(context);
     await this.queueExistingLocal();
   },
 
   /**
-   * Claim rows written while no account was signed in, without re-enqueueing the whole dataset.
-   * queueChange skips the outbox without a session, so each active row is queued for this
-   * account before it is claimed: if claiming fails, the row is still unassigned and is queued
-   * again (coalesced) next time. Built-in categories are not queued; ensurePushDependencies
-   * uploads them once something references them. Outbox entries left without an owner are
-   * then handed over only for entities this account now owns.
+   * Claim rows written while no account was signed in for the session in `context`, without
+   * re-enqueueing the whole dataset. It never changes who is signed in, and stops with
+   * SyncSessionChangedError before any write once that session is no longer current.
+   *
+   * Row by row, each active row is queued for the account before it is claimed (built-in
+   * categories and tombstones are claimed without being queued). RxDB has no transaction across
+   * the row and the outbox, so the queued entry is the commit point: a row whose claim was cut
+   * short after its entry was written still has that entry, and is later assigned to the
+   * account the entry belongs to, whoever runs the next claim. That keeps a row and its upload
+   * on the same account, and the account that signs in next never takes or uploads it. A row
+   * with entries from more than one other account is ambiguous and stays unassigned.
+   * Ownerless outbox entries are then handed over only for entities this account now owns.
    */
-  async claimUnassigned(userId: string): Promise<void> {
-    setCurrentUserId(userId);
+  async claimUnassigned(context: SyncContext): Promise<void> {
+    const { userId } = context;
+    const assertActive = () => assertSyncSession(context);
+    assertActive();
     for (const entityType of OWNED_ENTITY_TYPES) {
       const unassigned = await ownershipRepository.listUnassigned(entityType);
-      if (!unassigned.length) continue;
       for (const row of unassigned) {
-        if (row.deletedAt || row.isDefault) continue;
-        const snapshot = await loadClaimSnapshot(entityType, row.id);
-        if (!snapshot) continue;
-        if (getCurrentUserId() !== userId) throw new SyncSessionChangedError();
-        await syncQueueRepository.enqueue(entityType, row.id, 'update', snapshot, { userId });
+        const others = [...(await syncQueueRepository.queuedOwners(entityType, row.id))].filter(
+          (owner) => owner && owner !== userId
+        );
+        if (others.length > 1) continue;
+        const owner = others[0] ?? userId;
+        if (owner === userId && !row.deletedAt && !row.isDefault) {
+          const snapshot = await loadClaimSnapshot(entityType, row.id);
+          if (!snapshot || (snapshot as { userId?: string }).userId) continue;
+          assertActive();
+          await syncQueueRepository.enqueue(entityType, row.id, 'update', snapshot, { userId });
+        }
+        assertActive();
+        await ownershipRepository.claim(entityType, [row.id], owner, assertActive);
       }
-      await ownershipRepository.claim(
-        entityType,
-        unassigned.map((row) => row.id),
-        userId
-      );
     }
+    assertActive();
     await syncQueueRepository.claimUnowned(
       userId,
       async (entityType, entityId) =>
-        entityType !== 'profile' && (await ownershipRepository.ownerOf(entityType, entityId)) === userId
+        entityType !== 'profile' && (await ownershipRepository.ownerOf(entityType, entityId)) === userId,
+      assertActive
     );
+    assertActive();
     await syncStateRepository.save({ userId });
   },
 
@@ -209,9 +225,7 @@ export const syncService = {
   async ensurePushDependencies(context?: SyncContext): Promise<void> {
     const ctx = context ?? captureSyncContext();
     if (!ctx) return;
-    assertSyncSession(ctx);
-
-    await this.claimUnassigned(ctx.userId);
+    await this.claimUnassigned(ctx);
 
     const queue = await syncQueueRepository.list(ctx.userId);
     const refs = collectSyncDependencyRefs(queue);
@@ -265,6 +279,16 @@ export const syncService = {
     for (const item of queue) {
       // Remote writes stamp the session's user id, so an entry of a previous account must never be sent.
       assertSyncSession(ctx);
+      if (item.entityType !== 'profile') {
+        const owner = await ownershipRepository.ownerOf(item.entityType, item.entityId);
+        // An entry left by an interrupted claim on an older version can describe a row another
+        // account owns now; uploading it would copy that row into this account. It stays queued.
+        if (owner && owner !== ctx.userId) {
+          syncLog(`skipped ${item.entityType} entry for a row owned by another account`);
+          continue;
+        }
+        assertSyncSession(ctx);
+      }
       try {
         syncEntityLog(item.entityType, 'push', item.operation);
         const payload = JSON.parse(item.payload) as { id?: string; deletedAt?: string; updatedAt?: string };
@@ -524,17 +548,18 @@ async function executePullRemoteChanges(context: SyncContext): Promise<void> {
 
 async function executeFullSync(): Promise<void> {
   syncLog('initializing');
-  const userId = getCurrentUserId();
+  const context = captureSyncContext();
   if (!isSupabaseConfigured()) {
     syncLog('cloud not configured');
     emit('offline', null, await syncQueueRepository.count());
     return;
   }
-  if (!userId) {
+  if (!context) {
     syncLog('waiting for authentication');
     emit('offline', null, await syncQueueRepository.count());
     return;
   }
+  const { userId } = context;
   syncLog(`authenticated user: ${shortUserId(userId)}`);
   const online = await isOnline();
   const pending = await syncQueueRepository.count();
@@ -545,14 +570,12 @@ async function executeFullSync(): Promise<void> {
     return;
   }
 
-  const context: SyncContext = { userId };
   emit('syncing', (await syncStateRepository.get()).lastSyncedAt, pending);
   await syncStateRepository.save({ status: 'syncing', lastError: null });
   try {
     // Signed-out rows are queued for this account and claimed before deciding how to sync, so
     // they count as pending work and are uploaded instead of being replaced.
-    assertSyncSession(context);
-    await syncService.claimUnassigned(userId);
+    await syncService.claimUnassigned(context);
     assertSyncSession(context);
     const replaced =
       !(await syncQueueRepository.hasPendingForUser(userId)) &&

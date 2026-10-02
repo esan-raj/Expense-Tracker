@@ -1,7 +1,9 @@
 /// <reference types="jest" />
 
 let mockUser: string | null = 'user-a';
+let mockGeneration = 0;
 const setUser = (userId: string | null) => {
+  if (userId !== mockUser) mockGeneration += 1;
   mockUser = userId;
 };
 
@@ -140,6 +142,7 @@ jest.mock('@/database/repositories/syncQueueRepository', () => ({
 }));
 jest.mock('@/database/session', () => ({
   getCurrentUserId: () => mockUser,
+  getSessionGeneration: () => mockGeneration,
   setCurrentUserId: (userId: string | null) => setUser(userId),
 }));
 jest.mock('@/services/categoryDedupeService', () => ({ categoryDedupeService: { apply: jest.fn(async () => undefined) } }));

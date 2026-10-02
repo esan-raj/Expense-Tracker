@@ -88,7 +88,7 @@ jest.mock('@/database/repositories/syncQueueRepository', () => ({
     return cursors;
   },
 }));
-jest.mock('@/database/session', () => ({ getCurrentUserId: () => 'u1', setCurrentUserId: jest.fn() }));
+jest.mock('@/database/session', () => ({ getCurrentUserId: () => 'u1', getSessionGeneration: () => 1 }));
 jest.mock('@/services/financeRevision', () => ({ bumpFinanceRevision: jest.fn() }));
 
 import { syncService } from '@/services/syncService';

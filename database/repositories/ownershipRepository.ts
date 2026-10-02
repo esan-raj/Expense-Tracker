@@ -53,13 +53,22 @@ export const ownershipRepository = {
     return rows.map((row) => ({ id: row.id, deletedAt: row.deletedAt, isDefault: Boolean(row.isDefault) }));
   },
 
-  /** Assign the given rows to `userId`, skipping any row that already has an owner. Returns claimed ids. */
-  async claim(entityType: OwnedEntityType, ids: readonly string[], userId: string): Promise<string[]> {
+  /**
+   * Assign the given rows to `userId`, skipping any row that already has an owner. Returns claimed ids.
+   * `assertActive` runs right before the patch so a stale session never starts it.
+   */
+  async claim(
+    entityType: OwnedEntityType,
+    ids: readonly string[],
+    userId: string,
+    assertActive?: () => void
+  ): Promise<string[]> {
     if (!userId || !ids.length) return [];
     const db = await getRxDatabase();
     const rows = await collection(db, entityType)
       .find({ selector: { id: { $in: [...ids] }, userId: '' } })
       .exec();
+    assertActive?.();
     await Promise.all(rows.map((row) => row.incrementalPatch({ userId })));
     return rows.map((row) => row.id);
   },

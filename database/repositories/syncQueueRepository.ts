@@ -125,11 +125,13 @@ export const syncQueueRepository = {
    * and the payload names no other owner. Entries for anyone else's data stay untouched.
    * If the account already has an entry for the same entity, the newest one is kept:
    * every entry is a full snapshot or a tombstone, so the newest supersedes older ones.
-   * Idempotent; a partial failure is retried by the next call.
+   * Idempotent; a partial failure is retried by the next call. `assertActive` runs before each
+   * entry is changed so a stale session stops without handing over anything more.
    */
   async claimUnowned(
     userId: string,
-    ownsEntity: (entityType: SyncEntityType, entityId: string) => Promise<boolean>
+    ownsEntity: (entityType: SyncEntityType, entityId: string) => Promise<boolean>,
+    assertActive?: () => void
   ): Promise<number> {
     if (!userId) return 0;
     const db = await getRxDatabase();
@@ -142,6 +144,7 @@ export const syncQueueRepository = {
       const mine = await db.syncQueue
         .find({ selector: { userId, entityType: row.entityType, entityId: row.entityId } })
         .exec();
+      assertActive?.();
       const newest = mine.reduce((best, candidate) => (candidate.createdAt > best.createdAt ? candidate : best), row);
       await Promise.all(mine.filter((candidate) => candidate !== newest).map((candidate) => candidate.remove()));
       if (newest === row) await row.incrementalPatch({ userId });
@@ -150,6 +153,13 @@ export const syncQueueRepository = {
     }
     if (claimed) rxLog('sync', 'claim', { count: claimed });
     return claimed;
+  },
+
+  /** Accounts with an entry queued for this entity ('' for ownerless entries). */
+  async queuedOwners(entityType: SyncEntityType, entityId: string): Promise<Set<string>> {
+    const db = await getRxDatabase();
+    const rows = await db.syncQueue.find({ selector: { entityType, entityId } }).exec();
+    return new Set(rows.map((row) => row.userId));
   },
 
   /** Whether this account still has local changes waiting to upload. Other owners' entries are ignored. */

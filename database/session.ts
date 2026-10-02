@@ -1,11 +1,23 @@
 let currentUserId: string | null = null;
 let scopedUserId: string | null = null;
+/**
+ * Advances on every change of signed-in identity, including sign-out, so work started for a
+ * session can tell it is stale even after the same account signs in again. Repeated
+ * notifications for the account already signed in (token refresh) leave it unchanged.
+ */
+let sessionGeneration = 0;
 
+/** Only the authentication layer changes the signed-in account. */
 export function setCurrentUserId(userId: string | null): void {
+  if (userId !== currentUserId) sessionGeneration += 1;
   currentUserId = userId;
   if (userId) {
     scopedUserId = userId;
   }
+}
+
+export function getSessionGeneration(): number {
+  return sessionGeneration;
 }
 
 export function setScopedUserId(userId: string | null): void {
@@ -23,6 +35,7 @@ export function getScopedUserId(): string | null {
 export function resetSessionForTests(): void {
   currentUserId = null;
   scopedUserId = null;
+  sessionGeneration += 1;
 }
 
 export function isInScope(

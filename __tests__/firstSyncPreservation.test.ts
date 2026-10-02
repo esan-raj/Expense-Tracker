@@ -90,6 +90,7 @@ import { categoryRepository } from '@/database/repositories/categoryRepository';
 import { ownershipRepository } from '@/database/repositories/ownershipRepository';
 import { syncService } from '@/services/syncService';
 import { syncGate } from '@/services/syncSingleFlight';
+import { captureSyncContext } from '@/services/syncSession';
 
 const T0 = '2026-10-01T08:00:00.000Z';
 const base = { createdAt: T0, updatedAt: T0, deletedAt: '' };
@@ -189,7 +190,7 @@ describe('first cloud sync after working signed out', () => {
 
     // What useAuthStore.signIn does, followed by the launch/after-login full sync.
     setCurrentUserId('user-b');
-    await syncService.claimLocalData('user-b');
+    await syncService.claimLocalData(captureSyncContext()!);
     const queuedBeforeSync = (await syncQueueRepository.list('user-b')).length;
     await syncService.performFullSync();
 
@@ -221,7 +222,7 @@ describe('first cloud sync after working signed out', () => {
     seedCloudAccount();
 
     setCurrentUserId('user-b');
-    await syncService.claimLocalData('user-b');
+    await syncService.claimLocalData(captureSyncContext()!);
     await syncService.performFullSync();
 
     expect((await localRow(collection, id))?.userId).toBe('user-b');
@@ -233,7 +234,7 @@ describe('first cloud sync after working signed out', () => {
     await seedSignedOutWork();
     seedCloudAccount();
     setCurrentUserId('user-b');
-    await syncService.claimUnassigned('user-b');
+    await syncService.claimUnassigned(captureSyncContext()!);
     const replaceAll = jest.spyOn(accountRepository, 'replaceAll');
 
     expect(await syncService.shouldReplaceLocalFromRemote()).toBe(true);
@@ -251,7 +252,7 @@ describe('first cloud sync after working signed out', () => {
     const before = await Promise.all(collections.map((name) => db[name].count().exec()));
 
     setCurrentUserId('user-b');
-    await syncService.claimLocalData('user-b');
+    await syncService.claimLocalData(captureSyncContext()!);
     await syncService.performFullSync();
 
     const after = await Promise.all(collections.map((name) => db[name].count().exec()));
@@ -380,7 +381,7 @@ describe('first cloud sync after working signed out', () => {
     jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
     setCurrentUserId('user-b');
-    await syncService.claimLocalData('user-b');
+    await syncService.claimLocalData(captureSyncContext()!);
     await syncService.performFullSync();
 
     expect((await localRow('transactions', 'tx-local'))?.userId).toBe('user-b');
@@ -399,7 +400,7 @@ describe('first cloud sync after working signed out', () => {
     await seedSignedOutWork();
     seedCloudAccount();
     setCurrentUserId('user-b');
-    await syncService.claimLocalData('user-b');
+    await syncService.claimLocalData(captureSyncContext()!);
 
     // Process restart: in-memory session and gate state are gone, the local database is not.
     resetSessionForTests();
@@ -416,7 +417,7 @@ describe('first cloud sync after working signed out', () => {
     mockOnline = false;
 
     setCurrentUserId('user-b');
-    await syncService.claimUnassigned('user-b');
+    await syncService.claimUnassigned(captureSyncContext()!);
     await syncService.performFullSync();
 
     expect((await syncStateRepository.get()).status).toBe('offline');
