@@ -187,16 +187,43 @@ Add `--group <update-group-id>` to republish a specific group. Republishing cann
 
 Apply in order in the Supabase SQL editor. `009_harden_sync_server_time_permissions.sql` revokes and grants on the function created by `008_server_sync_cursor.sql`, so `009` fails if `008` is missing. The app keeps the legacy `updated_at` pull when `sync_server_time()` does not exist, so these can be applied before or after a compatible OTA.
 
+Order: `008` first, then `009`. Never edit `008` (a test pins its SHA-256) and never add a second `009`.
+
 Manual checks after applying `009` (SQL editor):
 
 ```sql
--- 008 is deployed: function and column exist.
-select to_regprocedure('public.sync_server_time()') is not null as has_function;
-select count(*) = 6 as has_columns
+-- 008 columns: expect 6 rows, timestamp with time zone, is_nullable = NO.
+select table_name, data_type, is_nullable
 from information_schema.columns
 where table_schema = 'public'
   and column_name = 'server_updated_at'
-  and table_name in ('transactions', 'categories', 'budgets', 'recurring_transactions', 'accounts', 'investments');
+  and table_name in ('transactions', 'categories', 'budgets', 'recurring_transactions', 'accounts', 'investments')
+order by table_name;
+
+-- 008 triggers: expect 6 rows, BEFORE INSERT OR UPDATE, function set_server_updated_at.
+select c.relname as table_name, t.tgname as trigger_name, p.proname as function_name,
+       pg_get_triggerdef(t.oid) as definition
+from pg_trigger t
+join pg_class c on c.oid = t.tgrelid
+join pg_namespace n on n.oid = c.relnamespace
+join pg_proc p on p.oid = t.tgfoid
+where n.nspname = 'public' and not t.tgisinternal and t.tgname = c.relname || '_set_server_updated_at'
+order by c.relname;
+
+-- 008 indexes: expect 6 rows, each on (user_id, server_updated_at).
+select tablename, indexname, indexdef
+from pg_indexes
+where schemaname = 'public' and indexname = 'idx_' || tablename || '_user_server_updated'
+order by tablename;
+
+-- Function signature and ACL: expect exactly one row, sync_server_time(), returns
+-- timestamp with time zone, provolatile = v, prosecdef = false. proacl must contain
+-- authenticated=X/..., and must not contain anon=X/... or a PUBLIC entry (one starting with =X/).
+select p.oid::regprocedure as signature, pg_get_function_result(p.oid) as returns,
+       p.provolatile, p.prosecdef, p.proacl
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname = 'sync_server_time';
 
 -- 009 permission boundary: expect authenticated = true, anon = false, public = false.
 select
@@ -211,7 +238,35 @@ select
 select public.sync_server_time() as server_time, abs(extract(epoch from public.sync_server_time() - now())) < 5 as near_now;
 ```
 
-From the client (anon key): `supabase.rpc('sync_server_time')` without a session must fail with a permission error (`42501`); after signing in it must return an ISO timestamp. A `PGRST202` error means `008` is not deployed.
+From the client (anon key): `supabase.rpc('sync_server_time')` without a session must fail with a permission error (`42501`); after signing in it must return a timestamp. A `PGRST202` error means `008` is not deployed. The app treats only `PGRST202` as "not deployed" (legacy pull); a permission error or an unparseable value fails the sync instead of silently falling back.
+
+### Pull cursor limits and recovery
+
+- Incremental pulls re-read rows stamped up to 60 seconds before the stored cursor. A server write whose transaction commits more than 60 seconds after its `server_updated_at` stamp can be missed by incremental pulls. It is picked up by the next full pull.
+- A full pull runs when the account has no stored cursor on the device, the stored cursor or full-pull stamp is unreadable, either stamp is ahead of the server clock, or 24 hours have passed since the last full pull. A full pull then stores the current server time.
+- Server timestamps are parsed explicitly (microseconds and `+00:00` offsets included) and stored as ISO-8601 UTC; a value that cannot be parsed is never stored as a cursor.
+- There is no manual "full resync" control. Signing in to an account for the first time on a device starts with a full pull.
+
+### Sync smoke tests (physical devices)
+
+Not performed by repository setup or CI. Use two Android devices on a compatible preview update, with `008` and `009` applied.
+
+Recurring occurrence across two devices (same account):
+
+1. Create a recurring rule due today on device A while online and let it sync.
+2. On device B, go offline, open the app so it generates the same occurrence locally.
+3. On device A, edit that occurrence (for example the amount) and let it sync.
+4. Bring device B online and sync. Expect A's edit on B, a single occurrence (no duplicate), and an empty pending queue.
+5. Repeat with B editing its own copy after step 3 while still offline, then going online: B's later edit wins on both devices.
+6. Delete the occurrence on A, sync, then sync B with an untouched copy: it disappears on B and is not regenerated.
+7. On a device, after the first sync completes, a second sync should log `starting pull (incremental, server_updated_at)`. If every sync logs `full`, the device is not reading the stored cursor.
+
+Account switching (one device):
+
+1. Sign in as account A and sync. Sign out.
+2. While signed out, create a transaction. Sign in as account B: that transaction belongs to B, uploads to B (check `transactions` filtered by B's `user_id` in Supabase), and none of A's rows appear in B.
+3. Queue many changes in A (for example offline), go online and sign out then into B while the sync is running. No A rows may be written under B's `user_id`, and B finishes with its own full sync.
+4. Sign back in as A: A's data is intact, and anything A still had pending uploads under A.
 
 ## Physical APK verification
 
