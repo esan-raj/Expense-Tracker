@@ -181,9 +181,27 @@ describe('remoteApi.serverTime', () => {
     await expect(remoteApi.serverTime()).resolves.toBeNull();
   });
 
+  it('also treats PostgREST’s explicit “function not found” message as not deployed', async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'Could not find the function public.sync_server_time without parameters in the schema cache' },
+    });
+    await expect(remoteApi.serverTime()).resolves.toBeNull();
+  });
+
   it('fails on permission errors instead of silently using the legacy pull', async () => {
     rpc.mockResolvedValue({ data: null, error: { code: '42501', message: 'permission denied' } });
     await expect(remoteApi.serverTime()).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it.each([
+    ['a permission error naming the function', { code: '42501', message: 'permission denied for function sync_server_time' }],
+    ['a network failure', { code: '', message: 'TypeError: Failed to fetch' }],
+    ['a database connection error', { code: 'PGRST000', message: 'Could not connect with the database' }],
+    ['a server error', { code: '500', message: 'Internal Server Error' }],
+  ])('fails on %s instead of falling back', async (_label, error) => {
+    rpc.mockResolvedValue({ data: null, error });
+    await expect(remoteApi.serverTime()).rejects.toBe(error);
   });
 
   it.each([['garbage'], [null], ['2026-10-01T12:00:00']])('fails on an unusable value %p', async (data) => {
