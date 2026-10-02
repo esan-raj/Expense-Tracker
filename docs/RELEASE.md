@@ -183,9 +183,53 @@ Add `--group <update-group-id>` to republish a specific group. Republishing cann
 - Supabase SQL/RLS migrations are a separate deployment. Publishing OTA does not apply them.
 - Rolling back JavaScript does **not** reverse RxDB or Supabase migrations. If a schema migration already ran on a device, republishing older JS can break that device until you ship forward-compatible code.
 
+### Applying Supabase migrations with the guarded runner
+
+`scripts/apply-supabase-migrations.js` checks and applies `supabase/migrations` through the Supabase CLI's tracked history (`supabase_migrations.schema_migrations`). It never runs on its own (not in CI, not on OTA publish), and a plain run never changes the database.
+
+**Connection string.** The runner reads `SUPABASE_DB_URL`. `DATABASE_URL` and `POSTGRES_URL` are accepted as fallbacks; the first one set wins, and variables already set in the shell win over `--env-file`. Copy the URI from Supabase Dashboard → Project Settings → Database → Connection string, percent-encoding special characters in the password, and put it in `.env.local`, which git ignores:
+
+```text
+SUPABASE_DB_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres
+```
+
+Never commit it, never paste it into an issue or a command line, and never prefix it with `EXPO_PUBLIC_` (those values are bundled into the app). `EXPO_PUBLIC_SUPABASE_URL`, the anon key and the service-role key are API credentials, not PostgreSQL connection strings: they cannot run DDL, and the runner rejects them. The runner refuses an `--env-file` that git would commit, never prints the connection string or password, and hands the password to the CLI through `PGPASSWORD` rather than its arguments.
+
+**1. Check (read-only, run this first):**
+
+```powershell
+node scripts/apply-supabase-migrations.js --check --env-file .env.local
+```
+
+Before connecting it verifies migration names, numbering from `001` without gaps or duplicates, the pinned `008`/`009` hashes, and that `supabase/migrations` has no uncommitted changes. It then identifies the target project (database host or pooler user, `EXPO_PUBLIC_SUPABASE_URL`, and a linked `supabase/.temp/project-ref` must all agree) and runs only `supabase migration list` (Supabase CLI 2.119.0 through npx, downloaded on first use; set `SUPABASE_CLI_PATH` to use an installed CLI). It prints what the remote has recorded and what is pending:
+
+```text
+Local migrations: 9 (001–009), 008 and 009 match their published hashes.
+Target: db.<project-ref>.supabase.co:5432/postgres (project <project-ref>)
+Recorded as applied on the remote: 001, 002, 003, 004, 005, 006, 007
+Pending: 008, 009
+Check passed. Run with --apply --confirm-project-ref <ref> to apply the pending migrations.
+```
+
+It refuses (exit 1) when the remote records a version that is not in the repository, when a pending migration is older than the newest applied one (that would need `--include-all`, which the runner never uses), or when the remote history is empty. An empty history usually means earlier migrations were run by hand in the SQL editor: a push would run `001` onwards again. In that case confirm in the SQL editor which migrations the schema already contains, record exactly those with `supabase migration repair --status applied <version>`, and run the check again. That repair changes remote history, so it is a deliberate manual step; the runner never repairs, resets or marks migrations as applied.
+
+**2. Apply (only after a passing check, and only when you intend to change that project):**
+
+```powershell
+node scripts/apply-supabase-migrations.js --apply --confirm-project-ref <project-ref> --env-file .env.local
+```
+
+`<project-ref>` is the subdomain of `EXPO_PUBLIC_SUPABASE_URL`. The runner repeats every check, refuses if the confirmation does not match the target, compares `supabase db push --dry-run` with the pending list, runs `supabase db push`, and reads the history again. Success ends with `Applied 008, 009. The remote history now records 001, …, 009.` It never uses `db reset`, `--include-all`, `--include-roles` or `--include-seed`.
+
+Exit codes: `0` success or nothing to do; `1` refused or failed; `2` invalid arguments; `3` result unknown. The CLI applies each file in its own transaction and stops at the first SQL error: the failing file is rolled back and not recorded, files before it stay applied and recorded, and the runner prints which versions the history now records.
+
+**Interrupted or unclear result (exit 3, lost connection, closed terminal).** Do not run `--apply` again. Run `--check`, or run `select version, name from supabase_migrations.schema_migrations order by version;` in the SQL editor, and continue only from what the remote actually recorded. Rerunning is safe once the history is known: recorded migrations are never pushed twice.
+
+After applying, run the `008`/`009` checks below and the client RPC checks.
+
 ### Sync cursor migrations (008, 009)
 
-Apply in order in the Supabase SQL editor. `009_harden_sync_server_time_permissions.sql` revokes and grants on the function created by `008_server_sync_cursor.sql`, so `009` fails if `008` is missing. The app keeps the legacy `updated_at` pull when `sync_server_time()` does not exist, so these can be applied before or after a compatible OTA.
+Apply in order, preferably with the guarded runner above so the history records them. If you use the SQL editor instead, the history stays empty and the runner will refuse until it is repaired. `009_harden_sync_server_time_permissions.sql` revokes and grants on the function created by `008_server_sync_cursor.sql`, so `009` fails if `008` is missing. The app keeps the legacy `updated_at` pull when `sync_server_time()` does not exist, so these can be applied before or after a compatible OTA.
 
 Order: `008` first, then `009`. Never edit `008` (a test pins its SHA-256) and never add a second `009`.
 
