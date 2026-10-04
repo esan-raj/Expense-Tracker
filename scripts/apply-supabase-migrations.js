@@ -303,12 +303,19 @@ function versionsOf(files) {
   return files.map((file) => NAME_PATTERN.exec(file.name)[1]).sort();
 }
 
+/** A table cell without surrounding whitespace or one pair of backticks (the CLI on Windows wraps cells). */
+function tableCell(cell) {
+  const trimmed = cell.trim();
+  const quoted = /^`([^`]*)`$/.exec(trimmed);
+  return quoted ? quoted[1].trim() : trimmed;
+}
+
 /** Rows of `supabase migration list`: the Local and Remote version columns. */
 function parseMigrationList(text) {
   const rows = [];
   for (const line of String(text).split(/\r?\n/)) {
     if (!line.includes('|')) continue;
-    const [local = '', remote = ''] = line.split('|').map((cell) => cell.trim());
+    const [local = '', remote = ''] = line.split('|').map(tableCell);
     if (/^local$/i.test(local) || (/^-*$/.test(local) && /^-*$/.test(remote))) continue;
     if ((local && !/^\d+$/.test(local)) || (remote && !/^\d+$/.test(remote))) continue;
     rows.push({ local: local || null, remote: remote || null });

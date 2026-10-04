@@ -407,6 +407,62 @@ describe('migration runner: remote history and apply', () => {
     ]);
   });
 
+  describe('Supabase CLI 2.119.0 output on Windows (backtick-wrapped cells)', () => {
+    const NINE = ['001', '002', '003', '004', '005', '006', '007', '008', '009'];
+    const windowsLines = [
+      'Local | Remote | Time (UTC)',
+      '-------|--------|------------',
+      ...NINE.map((v) => ` \`${v}\` | \` \`    | \`${v}\``),
+    ];
+
+    it.each([
+      ['CRLF', windowsLines.join('\r\n')],
+      ['LF', windowsLines.join('\n')],
+    ])('reads nine local-only rows from the %s output', (_eol, output) => {
+      const rows = runner.parseMigrationList(output);
+      expect(rows).toEqual(NINE.map((v) => ({ local: v, remote: null })));
+
+      const plan = runner.planMigrations(NINE, rows);
+      expect(plan.applied).toEqual([]);
+      expect(plan.pending).toEqual(NINE);
+      expect(plan.problems).toEqual([expect.stringContaining('The remote migration history is empty')]);
+    });
+
+    it('reads mixed plain and backtick cells, and never takes the Time column as a version', () => {
+      const output = [
+        '   Local | Remote | Time (UTC)',
+        '  -------|--------|------------',
+        ' `001` | 001 | `001`',
+        ' 002 | `002` | 002',
+        ' `003` | ` ` | `003`',
+        ' ` ` | `004` | `004`',
+        ' ` ` | ` ` | `005`',
+        '      |        | 006',
+      ].join('\r\n');
+      expect(runner.parseMigrationList(output)).toEqual([
+        { local: '001', remote: '001' },
+        { local: '002', remote: '002' },
+        { local: '003', remote: null },
+        { local: null, remote: '004' },
+      ]);
+    });
+
+    it('still accepts digits only once backticks are removed', () => {
+      const output = [' `00a` | ` `', ' `1 2` | ` `', ' ``001`` | ` `', ' `001 | ` `', " '001' | ` `", ' 001 | `x`'].join('\n');
+      expect(runner.parseMigrationList(output)).toEqual([]);
+    });
+
+    it('turns that output into the empty-history refusal instead of an unreadable history', async () => {
+      const h = harness({ list: { code: 0, stdout: windowsLines.join('\r\n'), stderr: '' } });
+      expect(await runner.run([], h.deps)).toBe(EXIT.failed);
+      expect(h.out()).toContain('Recorded as applied on the remote: none');
+      expect(h.out()).toContain('Pending: 001, 002, 003, 004, 005, 006, 007, 008, 009');
+      expect(h.errText()).toContain('The remote migration history is empty');
+      expect(h.errText()).not.toContain('Could not read the remote migration history');
+      expect(h.supabaseCalls().map((call) => call.args.join(' ')).some((args) => args.includes('db push'))).toBe(false);
+    });
+  });
+
   it.each([
     ['an empty remote history', [], 'remote migration history is empty'],
     ['a remote migration missing locally', [...REAL_VERSIONS.slice(0, 7), '012'], 'records 012, which is not in'],
