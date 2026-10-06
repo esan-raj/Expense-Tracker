@@ -201,7 +201,7 @@ Never commit it, never paste it into an issue or a command line, and never prefi
 node scripts/apply-supabase-migrations.js --check --env-file .env.local
 ```
 
-Before connecting it verifies migration names, numbering from `001` without gaps or duplicates, the pinned `008`/`009` hashes, and that `supabase/migrations` has no uncommitted changes. It then identifies the target project (database host or pooler user, `EXPO_PUBLIC_SUPABASE_URL`, and a linked `supabase/.temp/project-ref` must all agree) and runs only `supabase migration list` (Supabase CLI 2.119.0 through npx, downloaded on first use; set `SUPABASE_CLI_PATH` to use an installed CLI). It prints what the remote has recorded and what is pending:
+Before connecting it verifies migration names, numbering from `001` without gaps or duplicates, the pinned `008`/`009` hashes, and that `supabase/migrations` has no uncommitted changes. It then identifies the target project (database host or pooler user, `EXPO_PUBLIC_SUPABASE_URL`, and a linked `supabase/.temp/project-ref` must all agree) and runs only `supabase migration list` (Supabase CLI 2.119.0 through npx, downloaded on first use; set `SUPABASE_CLI_PATH` to use an installed CLI that supports `--agent`, as 2.119.0 does). Every CLI call passes `--agent no`; without it, the CLI prints JSON inside AI-agent shells and the runner, unable to read it, refuses to continue. It prints what the remote has recorded and what is pending:
 
 ```text
 Local migrations: 9 (001–009), 008 and 009 match their published hashes.

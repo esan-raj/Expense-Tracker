@@ -490,10 +490,10 @@ describe('migration runner: remote history and apply', () => {
     expect(await runner.run(['--apply', '--confirm-project-ref', REF, '--verbose'], h.deps)).toBe(EXIT.ok);
     const commands = h.supabaseCalls().map((call) => call.args.filter((arg) => !arg.includes('://')).slice(3).join(' '));
     expect(commands).toEqual([
-      'migration list --db-url',
-      'db push --dry-run --db-url',
-      'db push --yes --db-url',
-      'migration list --db-url',
+      'migration list --agent no --db-url',
+      'db push --dry-run --agent no --db-url',
+      'db push --yes --agent no --db-url',
+      'migration list --agent no --db-url',
     ]);
     expect(commands.join(' ')).not.toMatch(/include-all|repair|reset/);
     expect(h.out()).toContain(`Applied ${REAL_VERSIONS.slice(7).join(', ')}. The remote history now records ${REAL_VERSIONS.join(', ')}.`);
@@ -553,7 +553,7 @@ describe('migration runner: remote history and apply', () => {
       DATABASE_URL: POOLER_URL,
       PATH: 'x',
     });
-    expect(call.args).toEqual(['migration', 'list', '--db-url', `postgresql://postgres.${REF}@aws-0-ap-south-1.pooler.supabase.com:6543/postgres`]);
+    expect(call.args).toEqual(['migration', 'list', '--agent', 'no', '--db-url', `postgresql://postgres.${REF}@aws-0-ap-south-1.pooler.supabase.com:6543/postgres`]);
     expect(call.env).toEqual({ PATH: 'x', PGPASSWORD: PASSWORD });
   });
 
@@ -562,5 +562,74 @@ describe('migration runner: remote history and apply', () => {
       file: 'C:\\Tools\\Supabase CLI\\supabase.exe',
       prefix: [],
     });
+  });
+});
+
+describe('migration runner: Supabase CLI agent detection', () => {
+  /** What Supabase CLI 2.119.0 printed for `migration list` inside an AI-agent shell. */
+  const AGENT_JSON = JSON.stringify({
+    migrations: REAL_VERSIONS.map((version) => ({ local: version, remote: '', time: version })),
+    message: 'Migrations listed',
+  });
+  const SHELL_ENV = {
+    PATH: 'C:\\Windows\\system32',
+    TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp',
+    USERPROFILE: 'C:\\Users\\me',
+    SSL_CERT_FILE: 'C:\\certs\\ca.pem',
+    PGSSLROOTCERT: 'C:\\certs\\supabase.crt',
+  };
+  const AGENT_ENV = { CURSOR_AGENT: '1', CURSOR_EXTENSION_HOST_ROLE: 'agent' };
+  const GITHUB_ENV = { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_WORKSPACE: '/home/runner/work' };
+  const baseEnv = { SUPABASE_DB_URL: DB_URL, EXPO_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co` };
+
+  it.each([
+    ['an AI-agent shell', AGENT_ENV],
+    ['GitHub Actions', GITHUB_ENV],
+    ['a plain terminal', {}],
+  ])('asks every CLI call for text output in %s and leaves the environment intact', async (_label, extra) => {
+    const h = harness({ env: { ...baseEnv, ...SHELL_ENV, ...extra } });
+    expect(await runner.run(['--apply', '--confirm-project-ref', REF], h.deps)).toBe(EXIT.ok);
+    const calls = h.supabaseCalls();
+    expect(calls).toHaveLength(4);
+    for (const call of calls) {
+      const flag = call.args.indexOf('--agent');
+      expect(call.args.slice(flag, flag + 3)).toEqual(['--agent', 'no', '--db-url']);
+      expect(call.opts.env).toEqual({ ...SHELL_ENV, ...extra, EXPO_PUBLIC_SUPABASE_URL: baseEnv.EXPO_PUBLIC_SUPABASE_URL, PGPASSWORD: PASSWORD });
+      expect(call.args.join(' ')).not.toContain(encodeURIComponent(PASSWORD));
+    }
+  });
+
+  it('treats agent JSON history output as unreadable instead of guessing, and pushes nothing', async () => {
+    const h = harness({ list: { code: 0, stdout: AGENT_JSON, stderr: '' } });
+    expect(await runner.run(['--apply', '--confirm-project-ref', REF], h.deps)).toBe(EXIT.failed);
+    expect(h.errText()).toContain('Could not read the remote migration history. Nothing was changed.');
+    expect(h.supabaseCalls().some((call) => call.args.includes('push'))).toBe(false);
+  });
+
+  it.each([
+    ['missing remote fields', JSON.stringify({ migrations: [{ local: '001' }, { local: '002' }] })],
+    ['renamed fields', JSON.stringify({ rows: [{ Local: '001', Remote: '001' }] })],
+    ['an empty list', JSON.stringify({ migrations: [] })],
+    ['a JSON error envelope', JSON.stringify({ _tag: 'Error', error: { code: 'DbConnectError', message: 'failed to connect' } })],
+  ])('refuses JSON with %s', async (_label, stdout) => {
+    const h = harness({ list: { code: 0, stdout, stderr: '' } });
+    expect(await runner.run([], h.deps)).toBe(EXIT.failed);
+    expect(h.errText()).toContain('Could not read the remote migration history. Nothing was changed.');
+  });
+
+  it('refuses a JSON dry run because it names no migration files', async () => {
+    const h = harness({ dryRun: { code: 0, stdout: JSON.stringify({ migrations: ['009_harden_sync_server_time_permissions.sql'] }), stderr: '' } });
+    expect(await runner.run(['--apply', '--confirm-project-ref', REF], h.deps)).toBe(EXIT.failed);
+    expect(h.errText()).toContain('Nothing was applied');
+    expect(h.supabaseCalls().some((call) => call.args.includes('push') && !call.args.includes('--dry-run'))).toBe(false);
+  });
+
+  it('reports a non-zero JSON error from the CLI as a failure and redacts the connection string', async () => {
+    const stderr = JSON.stringify({ _tag: 'Error', error: { code: 'DbConnectError', message: `failed to connect to ${DB_URL} with ${PASSWORD}` } });
+    const h = harness({ list: { code: 1, stdout: '', stderr } });
+    expect(await runner.run(['--apply', '--confirm-project-ref', REF], h.deps)).toBe(EXIT.failed);
+    expect(h.errText()).toContain('Could not read the remote migration history. Nothing was changed.');
+    expect(h.supabaseCalls().some((call) => call.args.includes('push'))).toBe(false);
+    expectNoSecrets(h.all());
   });
 });

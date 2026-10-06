@@ -18,6 +18,12 @@ const path = require('node:path');
 const util = require('node:util');
 
 const SUPABASE_CLI_VERSION = '2.119.0';
+/**
+ * The CLI prints JSON instead of its text tables when it detects an AI agent (CURSOR_AGENT or
+ * CURSOR_EXTENSION_HOST_ROLE in the environment, among others). The history and dry-run parsers
+ * read the text output, so every call asks for it explicitly.
+ */
+const CLI_TEXT_OUTPUT = ['--agent', 'no'];
 const DB_URL_VARIABLES = ['SUPABASE_DB_URL', 'DATABASE_URL', 'POSTGRES_URL'];
 const MIGRATIONS_DIR = 'supabase/migrations';
 const NAME_PATTERN = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
@@ -389,7 +395,7 @@ function buildCliCall(cli, parsed, cliArgs, baseEnv) {
   for (const name of DB_URL_VARIABLES) delete env[name];
   if (parsed.password) env.PGPASSWORD = parsed.password;
   else delete env.PGPASSWORD;
-  return { file: cli.file, args: [...cli.prefix, ...cliArgs, '--db-url', url.toString()], env };
+  return { file: cli.file, args: [...cli.prefix, ...cliArgs, ...CLI_TEXT_OUTPUT, '--db-url', url.toString()], env };
 }
 
 function execCommand(file, args, { cwd, env, timeoutMs }) {
