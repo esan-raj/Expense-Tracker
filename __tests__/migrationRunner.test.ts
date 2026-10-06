@@ -73,6 +73,7 @@ const NODE = 'C:\\Program Files\\nodejs\\node.exe';
 const migrationsDir = join(process.cwd(), 'supabase', 'migrations');
 const REAL_FILES = new Map(readdirSync(migrationsDir).map((name) => [name, readFileSync(join(migrationsDir, name), 'utf8')]));
 const REAL_VERSIONS = [...REAL_FILES.keys()].map((name) => name.slice(0, 3)).sort();
+const versionAfter = (count: number) => String(REAL_VERSIONS.length + count).padStart(3, '0');
 
 function historyTable(local: string[], remote: string[]): string {
   const versions = [...new Set([...local, ...remote])].sort();
@@ -322,7 +323,7 @@ describe('migration runner: local files', () => {
       '009_harden_sync_server_time_permissions.sql changed',
     ],
     ['a malformed name', withFile('10_bad.sql', 'select 1;'), 'migration names must look like'],
-    ['a gap before a future migration', withFile('011_skip.sql', 'select 1;'), 'Migration 010 is missing'],
+    ['a gap before a future migration', withFile(`${versionAfter(2)}_skip.sql`, 'select 1;'), `Migration ${versionAfter(1)} is missing`],
   ])('refuses %s before connecting to anything', async (_label, files, message) => {
     const h = harness({ files });
     expect(await runner.run([], h.deps)).toBe(EXIT.failed);
@@ -330,10 +331,10 @@ describe('migration runner: local files', () => {
     expect(h.exec).not.toHaveBeenCalled();
   });
 
-  it('accepts a valid future 010 and reports it as pending', async () => {
-    const h = harness({ files: withFile('010_future_change.sql', 'select 1;'), remote: REAL_VERSIONS });
+  it('accepts a valid future migration and reports it as pending', async () => {
+    const h = harness({ files: withFile(`${versionAfter(1)}_future_change.sql`, 'select 1;'), remote: REAL_VERSIONS });
     expect(await runner.run([], h.deps)).toBe(EXIT.ok);
-    expect(h.out()).toContain('Pending: 010');
+    expect(h.out()).toContain(`Pending: ${versionAfter(1)}`);
   });
 
   it('refuses to run while supabase/migrations has uncommitted changes', async () => {
@@ -495,7 +496,7 @@ describe('migration runner: remote history and apply', () => {
       'migration list --db-url',
     ]);
     expect(commands.join(' ')).not.toMatch(/include-all|repair|reset/);
-    expect(h.out()).toContain('Applied 008, 009. The remote history now records 001, 002, 003, 004, 005, 006, 007, 008, 009.');
+    expect(h.out()).toContain(`Applied ${REAL_VERSIONS.slice(7).join(', ')}. The remote history now records ${REAL_VERSIONS.join(', ')}.`);
     expectNoSecrets(h.all());
   });
 

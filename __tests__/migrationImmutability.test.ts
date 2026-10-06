@@ -24,6 +24,10 @@ const PUBLISHED: Record<string, { name: string; sha256: string }> = {
     name: '009_harden_sync_server_time_permissions.sql',
     sha256: '5cdf1b754509d27f23d3e696592c94253e1e4a1196b4b6d55cdb742c44fa66dc',
   },
+  '010': {
+    name: '010_fix_account_fk_delete_semantics.sql',
+    sha256: 'c982482144c3fb098754b27747c7352ba9c80e364aeba34924cd0865f3f308ee',
+  },
 };
 
 const NAME_PATTERN = /^(\d{3})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
@@ -73,13 +77,12 @@ const named = (name: string) => repository.find((file) => file.name === name)!;
 const without = (name: string) => repository.filter((file) => file.name !== name);
 
 describe('migrations directory', () => {
-  it('is valid: ordered, unique and with 008 and 009 exactly as published', () => {
+  it('is valid: ordered, unique and with 008, 009 and 010 exactly as published', () => {
     expect(migrationProblems(repository)).toEqual([]);
   });
 
-  it('pins the published hashes of 008 and 009', () => {
-    expect(sha256Lf(named(PUBLISHED['008'].name).contents)).toBe(PUBLISHED['008'].sha256);
-    expect(sha256Lf(named(PUBLISHED['009'].name).contents)).toBe(PUBLISHED['009'].sha256);
+  it.each(Object.entries(PUBLISHED))('pins the published hash of %s', (_number, published) => {
+    expect(sha256Lf(named(published.name).contents)).toBe(published.sha256);
   });
 
   it('ignores line endings when hashing', () => {
@@ -90,13 +93,10 @@ describe('migrations directory', () => {
 
 describe('migration validation rules', () => {
   it('accepts a correctly named next migration', () => {
-    expect(migrationProblems([...repository, { name: '010_add_receipts.sql', contents: 'select 1;' }])).toEqual([]);
+    expect(migrationProblems([...repository, { name: '011_add_receipts.sql', contents: 'select 1;' }])).toEqual([]);
   });
 
-  it.each([
-    ['008', PUBLISHED['008'].name],
-    ['009', PUBLISHED['009'].name],
-  ])('rejects an edited %s', (number, name) => {
+  it.each(Object.entries(PUBLISHED).map(([number, published]) => [number, published.name]))('rejects an edited %s', (number, name) => {
     const edited = without(name).concat({ name, contents: `${named(name).contents}\n-- edited\n` });
     expect(migrationProblems(edited)).toEqual([`published migration ${number} modified: ${name}`]);
   });
@@ -107,17 +107,17 @@ describe('migration validation rules', () => {
   });
 
   it('rejects renumbering a published migration', () => {
-    const name = PUBLISHED['009'].name;
-    const files = without(name).concat({ name: name.replace('009_', '010_'), contents: named(name).contents });
+    const name = PUBLISHED['010'].name;
+    const files = without(name).concat({ name: name.replace('010_', '011_'), contents: named(name).contents });
     expect(migrationProblems(files)).toEqual([
-      'out of sequence: expected 009, found 010',
-      `published migration 009 missing or renamed: ${name}`,
+      'out of sequence: expected 010, found 011',
+      `published migration 010 missing or renamed: ${name}`,
     ]);
   });
 
   it('rejects a gap in the sequence', () => {
-    expect(migrationProblems([...repository, { name: '011_skips_ten.sql', contents: 'select 1;' }])).toEqual([
-      'out of sequence: expected 010, found 011',
+    expect(migrationProblems([...repository, { name: '012_skips_eleven.sql', contents: 'select 1;' }])).toEqual([
+      'out of sequence: expected 011, found 012',
     ]);
   });
 

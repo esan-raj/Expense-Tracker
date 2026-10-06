@@ -229,7 +229,7 @@ After applying, run the `008`/`009` checks below and the client RPC checks.
 
 ### Auditing a hand-applied schema (read-only)
 
-`scripts/audit-supabase-migrations.js` compares the live schema with every material postcondition of `001`–`009` (tables, columns, types, defaults, keys, checks, indexes and predicates, RLS and policy expressions, functions, triggers, realtime publication, seed definitions and `sync_server_time()` privileges) and classifies each migration as `FULLY_PRESENT`, `PARTIALLY_PRESENT`, `NOT_PRESENT` or `AMBIGUOUS`. Run it before any `migration repair`:
+`scripts/audit-supabase-migrations.js` compares the live schema with every material postcondition of every migration (tables, columns, types, defaults, keys and their delete actions, checks, indexes and predicates, RLS and policy expressions, functions, triggers, realtime publication, seed definitions and `sync_server_time()` privileges) and classifies each migration as `FULLY_PRESENT`, `PARTIALLY_PRESENT`, `NOT_PRESENT` or `AMBIGUOUS`. Run it before any `migration repair`:
 
 ```powershell
 node scripts/audit-supabase-migrations.js --env-file .env
@@ -240,6 +240,12 @@ It reads the connection string exactly like the runner and never prints it. Ever
 TLS is verified. If verification fails, download the CA certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and add `--ca-file <path>`. Exit codes: `0` every migration fully present, `3` audit finished with other statuses, `1` no result, `2` invalid arguments. It never applies migrations, repairs history or changes data; record only a leading run of `FULLY_PRESENT` migrations, and only after reviewing the report.
 
 The tool uses the `pg` dev dependency. It is not part of the app bundle or the EAS fingerprint, but like any commit to `development` it triggers the existing preview OTA workflow.
+
+### Account foreign-key delete semantics (010)
+
+`010_fix_account_fk_delete_semantics.sql` recreates `transactions_account_user_fkey`, `recurring_account_user_fkey` and `investments_account_user_fkey` with `ON DELETE SET NULL (account_id)`. The `006`/`007` keys nulled every key column, so hard-deleting an account that still had linked rows failed on the NOT NULL `user_id`; now only the account link is cleared and the rows are kept. The app itself only soft-deletes accounts. No rows change and no app release is needed.
+
+Each `ALTER TABLE` briefly takes an exclusive lock on its table and on `public.accounts` while the key is revalidated, held until the file commits; `lock_timeout` is 5s, so the migration fails and rolls back instead of waiting behind a long transaction. Apply it with the guarded runner (`--check`, then `--apply`), never with `migration repair`. Before it is applied the audit reports `010` as `NOT_PRESENT` (exit 3); afterwards `001`–`010` are `FULLY_PRESENT` (exit 0). Needs PostgreSQL 15 or newer.
 
 ### Sync cursor migrations (008, 009)
 

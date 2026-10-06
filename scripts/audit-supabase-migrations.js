@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Read-only audit of a live database against supabase/migrations 001–009, for a database whose
- * migration history is empty because the SQL was run by hand in the SQL Editor.
+ * Read-only audit of a live database against every migration in supabase/migrations, first written
+ * for a database whose migration history was empty because the SQL had been run by hand.
  *
  *   node scripts/audit-supabase-migrations.js [--env-file .env] [--ca-file <supabase-ca.crt>]
  *
@@ -120,7 +120,7 @@ const ownerPolicies = (table, prefix) => [
   { table, name: `${prefix}_update_own`, command: 'UPDATE', roles: ['public'], using: OWN_ROW, check: OWN_ROW },
   { table, name: `${prefix}_delete_own`, command: 'DELETE', roles: ['public'], using: OWN_ROW, check: null },
 ];
-const accountOwnershipKey = (table, name) => ({
+const accountKeyShape = (table, name) => ({
   table,
   name,
   columns: ['account_id', 'user_id'],
@@ -128,6 +128,16 @@ const accountOwnershipKey = (table, name) => ({
   refColumns: ['id', 'user_id'],
   onDelete: 'n',
 });
+const accountOwnershipKey = (table, name) => ({
+  ...accountKeyShape(table, name),
+  deleteSetColumns: [],
+  amendedBy: { version: '010', definition: { deleteSetColumns: ['account_id'] } },
+});
+const ACCOUNT_OWNERSHIP_KEYS = [
+  ['public.transactions', 'transactions_account_user_fkey', '006'],
+  ['public.recurring_transactions', 'recurring_account_user_fkey', '006'],
+  ['public.investments', 'investments_account_user_fkey', '007'],
+];
 const NOTIFY_NOTE = "notify pgrst, 'reload schema' only refreshes PostgREST's schema cache at that moment and leaves nothing to inspect.";
 
 const MIGRATIONS = [
@@ -540,6 +550,24 @@ const MIGRATIONS = [
     ],
     unprovable: [NOTIFY_NOTE],
   },
+  {
+    version: '010',
+    file: '010_fix_account_fk_delete_semantics.sql',
+    sha256: 'c982482144c3fb098754b27747c7352ba9c80e364aeba34924cd0865f3f308ee',
+    foreignKeys: ACCOUNT_OWNERSHIP_KEYS.map(([table, name, version]) => ({
+      ...accountKeyShape(table, name),
+      deleteSetColumns: ['account_id'],
+      replaces: { version, definition: { deleteSetColumns: [] }, reason: 'ON DELETE SET NULL on every key column, including the NOT NULL user_id' },
+    })),
+    exclusiveForeignKeys: ACCOUNT_OWNERSHIP_KEYS.map(([table, name]) => ({ table, ref: 'public.accounts', name })),
+    nullability: ACCOUNT_OWNERSHIP_KEYS.flatMap(([table]) => [
+      { table, column: 'account_id', nullable: true },
+      { table, column: 'user_id', nullable: false },
+    ]),
+    unprovable: [
+      'That a hard delete now clears only account_id follows from the ON DELETE SET NULL (account_id) definition; the audit never deletes rows to try it.',
+    ],
+  },
 ];
 
 const AUDITED_TABLES = MIGRATIONS.flatMap((migration) => (migration.tables || []).map((table) => table.name));
@@ -627,6 +655,8 @@ order by 1, 2, a.attnum`,
        array(select a.attname::text from pg_catalog.unnest(co.confkey) with ordinality as k(attnum, ord)
              join pg_catalog.pg_attribute a on a.attrelid = co.confrelid and a.attnum = k.attnum order by k.ord) as ref_columns,
        co.confupdtype::text as on_update, co.confdeltype::text as on_delete, co.confmatchtype::text as match_type,
+       array(select a.attname::text from pg_catalog.unnest(co.confdelsetcols) with ordinality as k(attnum, ord)
+             join pg_catalog.pg_attribute a on a.attrelid = co.conrelid and a.attnum = k.attnum order by k.ord) as delete_set_columns,
        co.condeferrable as deferrable
 from pg_catalog.pg_constraint co
 join pg_catalog.pg_class c on c.oid = co.conrelid
@@ -925,7 +955,9 @@ async function collectDataEvidence(client, snapshot) {
       (row) => `${row.schema}.${row.table_name}` === spec.table && row.type === 'f' && row.name === spec.foreignKey
     );
     const fkSpec = MIGRATIONS.flatMap((migration) => migration.foreignKeys || []).find((fk) => fk.name === spec.foreignKey);
-    if (constraint && !foreignKeyDifferences(constraint, fkSpec).length) {
+    const proves = (row) =>
+      !foreignKeyDifferences(row, fkSpec).length || (fkSpec.amendedBy && !foreignKeyDifferences(row, { ...fkSpec, ...fkSpec.amendedBy.definition }).length);
+    if (constraint && proves(constraint)) {
       snapshot.backfill[spec.table] = { status: 'proven', reason: `the validated foreign key ${spec.foreignKey} guarantees it` };
       continue;
     }
@@ -1027,6 +1059,8 @@ const normalizeBody = (value) => String(value || '').replace(/\s+/g, ' ').trim()
 const bodyHash = (value) => createHash('sha256').update(normalizeBody(value)).digest('hex').slice(0, 12);
 const tableOf = (row) => `${row.schema}.${row.table_name}`;
 const refOf = (row) => (row.ref_table ? `${row.ref_schema}.${row.ref_table}` : null);
+/** SET NULL / SET DEFAULT without a column list applies to every key column. */
+const deleteAction = (action, setColumns) => `${ACTIONS[action] || action}${setColumns && setColumns.length ? ` (${setColumns.join(', ')})` : ''}`;
 
 function decodeTrigger(bits) {
   return {
@@ -1050,7 +1084,9 @@ function foreignKeyDifferences(row, spec) {
   if (refOf(row) !== spec.ref || !sameList(row.ref_columns, spec.refColumns)) {
     diffs.push(`references ${refOf(row)} (${(row.ref_columns || []).join(', ')}), expected ${spec.ref} (${spec.refColumns.join(', ')})`);
   }
-  if (row.on_delete !== spec.onDelete) diffs.push(`ON DELETE ${ACTIONS[row.on_delete] || row.on_delete}, expected ${ACTIONS[spec.onDelete]}`);
+  if (row.on_delete !== spec.onDelete || !sameList(row.delete_set_columns, spec.deleteSetColumns)) {
+    diffs.push(`ON DELETE ${deleteAction(row.on_delete, row.delete_set_columns)}, expected ${deleteAction(spec.onDelete, spec.deleteSetColumns)}`);
+  }
   if (row.on_update !== 'a') diffs.push(`ON UPDATE ${ACTIONS[row.on_update] || row.on_update}, expected NO ACTION`);
   if (row.match_type !== 's') diffs.push(`MATCH ${row.match_type === 'f' ? 'FULL' : row.match_type}, expected MATCH SIMPLE`);
   if (!row.validated) diffs.push('NOT VALID (existing rows were never checked)');
@@ -1108,6 +1144,16 @@ function evaluateForeignKey(ctx, spec) {
   if (exact) {
     ctx.match('constraint', spec.table, exact.name);
     return pass(exact.name);
+  }
+  const amended = spec.amendedBy && candidates.find((row) => !foreignKeyDifferences(row, { ...spec, ...spec.amendedBy.definition }).length);
+  if (amended) {
+    ctx.match('constraint', spec.table, amended.name);
+    return pass(`${amended.name}, amended by ${spec.amendedBy.version} to ON DELETE ${deleteAction(amended.on_delete, amended.delete_set_columns)}`);
+  }
+  const previous = spec.replaces && candidates.find((row) => !foreignKeyDifferences(row, { ...spec, ...spec.replaces.definition }).length);
+  if (previous) {
+    ctx.match('constraint', spec.table, previous.name);
+    return missing(`${previous.name} still has the ${spec.replaces.version} definition: ${spec.replaces.reason}`);
   }
   if (candidates.length) {
     ctx.match('constraint', spec.table, candidates[0].name);
@@ -1282,8 +1328,19 @@ function checksFor(migration) {
     });
   }
   for (const spec of migration.foreignKeys || []) {
-    const label = `foreign key ${spec.name ? `${spec.name} ` : ''}${spec.table} (${spec.columns.join(', ')}) → ${spec.ref} (${spec.refColumns.join(', ')}) ON DELETE ${ACTIONS[spec.onDelete]}`;
+    const label = `foreign key ${spec.name ? `${spec.name} ` : ''}${spec.table} (${spec.columns.join(', ')}) → ${spec.ref} (${spec.refColumns.join(', ')}) ON DELETE ${deleteAction(spec.onDelete, spec.deleteSetColumns)}`;
     add('foreignKey', label, (ctx) => evaluateForeignKey(ctx, spec));
+  }
+  for (const spec of migration.exclusiveForeignKeys || []) {
+    add(
+      'exclusiveForeignKey',
+      `${spec.name} is the only foreign key from ${spec.table} to ${spec.ref}`,
+      (ctx) => {
+        const others = ctx.foreignKeys(spec.table).filter((row) => refOf(row) === spec.ref && row.name !== spec.name);
+        return others.length ? mismatch(`also: ${others.map((row) => `${row.name} ${row.definition}`).join('; ')}`) : pass();
+      },
+      false
+    );
   }
   for (const spec of migration.checks || []) add('check', `check ${spec.name} on ${spec.table}`, (ctx) => evaluateCheck(ctx, spec));
   for (const spec of migration.uniques || []) {
@@ -1398,6 +1455,7 @@ const KIND_LABELS = {
   publication: 'realtime',
   seed: 'seeds',
   absentForeignKey: 'dropped FKs',
+  exclusiveForeignKey: 'sole account FKs',
   nullability: 'nullability',
   backfill: 'backfill',
   privilege: 'privileges',
@@ -1561,7 +1619,7 @@ function renderReport(report, { target }) {
     const problems = [...migration.missing, ...migration.mismatched, ...migration.unknown];
     if (!problems.length) lines.push(`- All ${migration.results.length} checks passed.`);
     for (const check of problems) lines.push(`- ${check.result.toUpperCase()}: ${safeText(check.label)}${check.detail ? `: ${safeText(check.detail, 400)}` : ''}`);
-    const notes = migration.results.filter((check) => check.result === 'pass' && check.detail && /replaced by|proven|guarantees|identical rows|boolean/.test(check.detail));
+    const notes = migration.results.filter((check) => check.result === 'pass' && check.detail && /replaced by|amended by|proven|guarantees|identical rows|boolean/.test(check.detail));
     for (const check of notes) lines.push(`- Note: ${safeText(check.label)}: ${safeText(check.detail)}`);
     for (const note of migration.unprovable) lines.push(`- Not provable automatically: ${note}`);
   }
@@ -1705,7 +1763,7 @@ async function run(argv, deps) {
     out('SpendWise migration audit (read-only: no migration, history, schema or data changes)');
     const notes = checkMigrationFiles(deps);
     assertAuditStatements();
-    out(`Manifest: ${MIGRATIONS.length} migrations (001–009) match their recorded file hashes; ${Object.keys(STATEMENTS).length} read-only statements validated.`);
+    out(`Manifest: ${MIGRATIONS.length} migrations (${MIGRATIONS[0].version}–${MIGRATIONS[MIGRATIONS.length - 1].version}) match their recorded file hashes; ${Object.keys(STATEMENTS).length} read-only statements validated.`);
     notes.forEach((note) => out(`Note: ${note}`));
 
     const env = await loadEnvironment(options, deps);

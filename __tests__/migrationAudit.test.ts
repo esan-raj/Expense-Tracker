@@ -25,6 +25,7 @@ interface MigrationReport {
   missing: CheckResult[];
   mismatched: CheckResult[];
   unknown: CheckResult[];
+  evidence: string;
 }
 interface Report {
   migrations: MigrationReport[];
@@ -124,7 +125,7 @@ function fullRows(): Record<string, Row[]> {
       indexes.push(indexRow(spec.table, name, spec.columns, { is_unique: true, is_primary: true, backs_constraint: true }));
     }
     for (const spec of migration.foreignKeys ?? []) {
-      if (spec.supersededBy) continue;
+      if (spec.supersededBy || spec.amendedBy) continue;
       const [refSchema, refTable] = spec.ref.split('.');
       constraints.push({
         ...split(spec.table),
@@ -139,6 +140,7 @@ function fullRows(): Record<string, Row[]> {
         on_update: 'a',
         on_delete: spec.onDelete,
         match_type: 's',
+        delete_set_columns: spec.deleteSetColumns ?? [],
         deferrable: false,
       });
     }
@@ -258,9 +260,9 @@ function withoutInvestments(rows: Record<string, Row[]>) {
 // ---------------------------------------------------------------------------------------------
 
 describe('migration audit: assertion manifest matches the SQL files', () => {
-  it('covers the nine migrations with their current file hashes', () => {
+  it('covers every migration file with its current file hash', () => {
     const files = readdirSync(migrationsDir).filter((name) => name.endsWith('.sql')).sort();
-    expect(audit.MIGRATIONS.map((migration) => migration.file)).toEqual(files.slice(0, 9));
+    expect(audit.MIGRATIONS.map((migration) => migration.file)).toEqual(files);
     const { createHash } = require('crypto') as { createHash: (a: string) => { update: (d: string) => { digest: (e: string) => string } } };
     for (const migration of audit.MIGRATIONS) {
       expect(createHash('sha256').update(sqlOf(migration.file)).digest('hex')).toBe(migration.sha256);
@@ -317,6 +319,22 @@ describe('migration audit: assertion manifest matches the SQL files', () => {
     expect(/add constraint accounts_id_user_unique unique \(id, user_id\)/.test(fileOf('006'))).toBe(true);
     expect(manifest('006').uniques).toEqual([{ table: 'public.accounts', name: 'accounts_id_user_unique', columns: ['id', 'user_id'] }]);
     for (const dropped of ['transactions_account_id_fkey', 'recurring_transactions_account_id_fkey']) expect(fileOf('006')).toContain(`drop constraint if exists ${dropped}`);
+
+    const recreated = [
+      ...fileOf('010').matchAll(
+        /alter table (public\.\w+)\s+drop constraint (\w+),\s+add constraint (\w+)\s+foreign key \(([^)]+)\)\s+references (public\.\w+) \(([^)]+)\)\s+on delete set null \(([^)]+)\);/g
+      ),
+    ].map(([, table, dropped, name, cols, ref, refCols, setCols]) => ({ table, dropped, name, columns: cols.split(', '), ref, refColumns: refCols.split(', '), setCols }));
+    expect(recreated.map(({ table, name }) => [table, name])).toEqual(manifest('010').foreignKeys.map((spec: Row) => [spec.table, spec.name]));
+    for (const key of recreated) {
+      expect(key.dropped).toBe(key.name);
+      expect(manifest('010').foreignKeys).toContainEqual(
+        expect.objectContaining({ table: key.table, name: key.name, columns: key.columns, ref: key.ref, refColumns: key.refColumns, onDelete: 'n', deleteSetColumns: [key.setCols] })
+      );
+      const original = [...manifest('006').foreignKeys, ...manifest('007').foreignKeys].find((spec: Row) => spec.name === key.name);
+      expect(original).toEqual(expect.objectContaining({ columns: key.columns, ref: key.ref, refColumns: key.refColumns, deleteSetColumns: [] }));
+    }
+    expect(fileOf('010').replace(/--.*$/gm, '')).not.toMatch(/\b(insert|update|delete from|truncate|drop table|cascade)\b/i);
   });
 
   it('has one check constraint for every CHECK in the files', () => {
@@ -509,7 +527,7 @@ describe('migration audit: classification', () => {
     for (const migration of report.migrations) {
       expect([migration.version, migration.status, migration.missing, migration.mismatched]).toEqual([migration.version, STATUS.full, [], []]);
     }
-    expect(report.fullyPresentPrefix).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009']);
+    expect(report.fullyPresentPrefix).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009', '010']);
     expect(report.unexpected.filter((item) => item.severity === 'conflict')).toEqual([]);
     expect(report.meta.dataQueries).toEqual([audit.STATEMENTS.seeds.readsApplicationData]);
     expect(fake.ids()).not.toContain('backfillTransactions');
@@ -616,7 +634,7 @@ describe('migration audit: classification', () => {
 
   it('detects a foreign key with the wrong delete action and then checks the backfill with one boolean', async () => {
     const rows = fullRows();
-    findRow(rows, 'constraints', 'transactions_account_user_fkey').on_delete = 'c';
+    Object.assign(findRow(rows, 'constraints', 'transactions_account_user_fkey'), { on_delete: 'c', delete_set_columns: [] });
     const fake = fakeClient(rows);
     const report = audit.evaluate(await audit.collectSnapshot(fake.client));
     const migration = statusOf(report, '006');
@@ -730,6 +748,106 @@ describe('migration audit: classification', () => {
   });
 });
 
+describe('migration audit: 010 account foreign key delete semantics', () => {
+  const KEYS: Array<[string, string, string]> = [
+    ['public.transactions', 'transactions_account_user_fkey', '006'],
+    ['public.recurring_transactions', 'recurring_account_user_fkey', '006'],
+    ['public.investments', 'investments_account_user_fkey', '007'],
+  ];
+  const keyRow = (rows: Record<string, Row[]>, table: string, name: string) => findRow(rows, 'constraints', name, table);
+  /** pg_get_constraintdef output on PostgreSQL 17. */
+  const pg17Definition = (setColumns: string) => `FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE SET NULL${setColumns}`;
+  const conflicts = (report: Report) => report.unexpected.filter((item) => item.severity === 'conflict').map((item) => item.text);
+  const investmentsLabel =
+    'foreign key investments_account_user_fkey public.investments (account_id, user_id) → public.accounts (id, user_id) ON DELETE SET NULL (account_id)';
+
+  it('accepts ON DELETE SET NULL (account_id) as PostgreSQL 17 reports it, and keeps 006 and 007 fully present', async () => {
+    const rows = fullRows();
+    for (const [table, name] of KEYS) Object.assign(keyRow(rows, table, name), { definition: pg17Definition(' (account_id)') });
+    const report = await reportOf(rows);
+    const migration = statusOf(report, '010');
+    expect(migration.status).toBe(STATUS.full);
+    expect(migration.evidence).toBe('foreign keys 3/3, sole account FKs 3/3, nullability 6/6');
+    expect(statusOf(report, '006').status).toBe(STATUS.full);
+    expect(statusOf(report, '007').status).toBe(STATUS.full);
+    expect(statusOf(report, '006').results.find((check) => check.label.startsWith('foreign key transactions_account_user_fkey'))!.detail).toBe(
+      'transactions_account_user_fkey, amended by 010 to ON DELETE SET NULL (account_id)'
+    );
+    expect(conflicts(report)).toEqual([]);
+  });
+
+  it('reports the original keys (SET NULL on every key column) as 010 NOT_PRESENT and everything else fully present', async () => {
+    const rows = fullRows();
+    for (const [table, name] of KEYS) Object.assign(keyRow(rows, table, name), { delete_set_columns: [], definition: pg17Definition('') });
+    const report = await reportOf(rows);
+    const migration = statusOf(report, '010');
+    expect(migration.status).toBe(STATUS.none);
+    expect(migration.missing.map((check) => check.detail)).toEqual(
+      KEYS.map(([, name, version]) => `${name} still has the ${version} definition: ON DELETE SET NULL on every key column, including the NOT NULL user_id`)
+    );
+    expect(report.migrations.filter((entry) => entry.version !== '010').map((entry) => entry.status)).toEqual(Array(9).fill(STATUS.full));
+    expect(report.fullyPresentPrefix).toEqual(['001', '002', '003', '004', '005', '006', '007', '008', '009']);
+    expect(conflicts(report)).toEqual([]);
+  });
+
+  it('treats a row without a delete column list as SET NULL on every key column', async () => {
+    const rows = fullRows();
+    for (const [table, name] of KEYS) delete keyRow(rows, table, name).delete_set_columns;
+    expect(statusOf(await reportOf(rows), '010').status).toBe(STATUS.none);
+  });
+
+  it.each([
+    ['SET NULL (user_id)', { delete_set_columns: ['user_id'] }, 'ON DELETE SET NULL (user_id), expected SET NULL (account_id)'],
+    ['SET NULL (account_id, user_id)', { delete_set_columns: ['account_id', 'user_id'] }, 'ON DELETE SET NULL (account_id, user_id), expected SET NULL (account_id)'],
+    ['CASCADE', { on_delete: 'c', delete_set_columns: [] }, 'ON DELETE CASCADE, expected SET NULL (account_id)'],
+    ['RESTRICT', { on_delete: 'r', delete_set_columns: [] }, 'ON DELETE RESTRICT, expected SET NULL (account_id)'],
+    ['NO ACTION', { on_delete: 'a', delete_set_columns: [] }, 'ON DELETE NO ACTION, expected SET NULL (account_id)'],
+    ['reversed source columns', { columns: ['user_id', 'account_id'] }, 'columns (user_id, account_id), expected (account_id, user_id)'],
+    ['reversed referenced columns', { ref_columns: ['user_id', 'id'] }, 'references public.accounts (user_id, id), expected public.accounts (id, user_id)'],
+    ['a NOT VALID key', { validated: false }, 'NOT VALID (existing rows were never checked)'],
+  ])('rejects %s on one key and reports 010 as partial', async (_label, change, detail) => {
+    const rows = fullRows();
+    Object.assign(keyRow(rows, 'public.investments', 'investments_account_user_fkey'), change);
+    const migration = statusOf(await reportOf(rows), '010');
+    expect(migration.status).toBe(STATUS.partial);
+    expect(migration.mismatched.map((check) => [check.label, check.detail])).toEqual([[investmentsLabel, `investments_account_user_fkey: ${detail}`]]);
+  });
+
+  it('does not call a database where every key has some other wrong action NOT_PRESENT', async () => {
+    const rows = fullRows();
+    for (const [table, name] of KEYS) Object.assign(keyRow(rows, table, name), { on_delete: 'c', delete_set_columns: [] });
+    expect(statusOf(await reportOf(rows), '010').status).toBe(STATUS.ambiguous);
+  });
+
+  it('flags an old key left beside the corrected one, in the migration and as a conflict', async () => {
+    const rows = fullRows();
+    const corrected = keyRow(rows, 'public.transactions', 'transactions_account_user_fkey');
+    rows.constraints.push({ ...corrected, name: 'transactions_account_user_fkey_old', delete_set_columns: [], definition: pg17Definition('') });
+    const report = await reportOf(rows);
+    const migration = statusOf(report, '010');
+    expect(migration.status).toBe(STATUS.partial);
+    expect(migration.mismatched.map((check) => [check.label, check.detail])).toEqual([
+      ['transactions_account_user_fkey is the only foreign key from public.transactions to public.accounts', `also: transactions_account_user_fkey_old ${pg17Definition('')}`],
+    ]);
+    expect(conflicts(report)).toEqual([`constraint transactions_account_user_fkey_old on public.transactions: ${pg17Definition('')}`]);
+  });
+
+  it('requires user_id to stay NOT NULL', async () => {
+    const rows = fullRows();
+    findRow(rows, 'columns', 'user_id', 'public.investments').nullable = true;
+    const migration = statusOf(await reportOf(rows), '010');
+    expect(migration.status).toBe(STATUS.partial);
+    expect(migration.mismatched.map((check) => [check.label, check.detail])).toEqual([['public.investments.user_id is NOT NULL', 'nullable']]);
+  });
+
+  it('reads the delete column list from pg_constraint.confdelsetcols in key order with a read-only statement', () => {
+    const { sql } = audit.STATEMENTS.constraints;
+    expect(sql).toContain('pg_catalog.unnest(co.confdelsetcols) with ordinality as k(attnum, ord)');
+    expect(sql).toMatch(/a\.attrelid = co\.conrelid and a\.attnum = k\.attnum order by k\.ord\) as delete_set_columns/);
+    expect(() => audit.assertReadOnlyStatement(sql)).not.toThrow();
+  });
+});
+
 describe('migration audit: command line', () => {
   function runDeps(options: { client?: object; env?: Row; envText?: string; envIgnored?: boolean; files?: Record<string, string> } = {}) {
     const stdout: string[] = [];
@@ -769,7 +887,7 @@ describe('migration audit: command line', () => {
     const out = h.out();
     expect(out).toContain('| Migration | Status | Passed checks | Missing checks | Mismatched checks | Evidence | Recommended next action |');
     expect(out).toContain('| 001_initial_schema.sql | FULLY_PRESENT |');
-    expect(out).toContain('Leading run of FULLY_PRESENT migrations: 001–009.');
+    expect(out).toContain('Leading run of FULLY_PRESENT migrations: 001–010.');
     expect(out).toContain('Target: aws-0-ap-south-1.pooler.supabase.com:5432/postgres (project abcdefghijklmnopqrst)');
     expect(out).toContain('Changes: none. No migration, migration-history, schema, privilege or data change was made.');
     expectNoSecrets(h.all());
@@ -809,12 +927,15 @@ describe('migration audit: command line', () => {
     expect(failing.client.end).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses before connecting when a migration file no longer matches the manifest', async () => {
-    const h = runDeps({ files: { '003_triggers.sql': 'select 1;' } });
-    expect(await audit.run([], h.deps)).toBe(EXIT.failed);
-    expect(h.err()).toContain('003_triggers.sql differs from the version this audit describes');
-    expect(h.createClient).not.toHaveBeenCalled();
-  });
+  it.each([['003_triggers.sql'], ['010_fix_account_fk_delete_semantics.sql']])(
+    'refuses before connecting when %s no longer matches the manifest',
+    async (file) => {
+      const h = runDeps({ files: { [file]: 'select 1;' } });
+      expect(await audit.run([], h.deps)).toBe(EXIT.failed);
+      expect(h.err()).toContain(`${file} differs from the version this audit describes`);
+      expect(h.createClient).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses an env file that git would commit, before connecting', async () => {
     const h = runDeps({ env: {}, envText: `SUPABASE_DB_URL=${POOLER_URL}\n`, envIgnored: false });
