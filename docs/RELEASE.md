@@ -211,7 +211,7 @@ Pending: 008, 009
 Check passed. Run with --apply --confirm-project-ref <ref> to apply the pending migrations.
 ```
 
-It refuses (exit 1) when the remote records a version that is not in the repository, when a pending migration is older than the newest applied one (that would need `--include-all`, which the runner never uses), or when the remote history is empty. An empty history usually means earlier migrations were run by hand in the SQL editor: a push would run `001` onwards again. In that case confirm in the SQL editor which migrations the schema already contains, record exactly those with `supabase migration repair --status applied <version>`, and run the check again. That repair changes remote history, so it is a deliberate manual step; the runner never repairs, resets or marks migrations as applied.
+It refuses (exit 1) when the remote records a version that is not in the repository, when a pending migration is older than the newest applied one (that would need `--include-all`, which the runner never uses), or when the remote history is empty. An empty history usually means earlier migrations were run by hand in the SQL editor: a push would run `001` onwards again. In that case confirm which migrations the schema already contains with the read-only audit below, record exactly those with `supabase migration repair --status applied <version>`, and run the check again. That repair changes remote history, so it is a deliberate manual step; the runner never repairs, resets or marks migrations as applied.
 
 **2. Apply (only after a passing check, and only when you intend to change that project):**
 
@@ -226,6 +226,20 @@ Exit codes: `0` success or nothing to do; `1` refused or failed; `2` invalid arg
 **Interrupted or unclear result (exit 3, lost connection, closed terminal).** Do not run `--apply` again. Run `--check`, or run `select version, name from supabase_migrations.schema_migrations order by version;` in the SQL editor, and continue only from what the remote actually recorded. Rerunning is safe once the history is known: recorded migrations are never pushed twice.
 
 After applying, run the `008`/`009` checks below and the client RPC checks.
+
+### Auditing a hand-applied schema (read-only)
+
+`scripts/audit-supabase-migrations.js` compares the live schema with every material postcondition of `001`–`009` (tables, columns, types, defaults, keys, checks, indexes and predicates, RLS and policy expressions, functions, triggers, realtime publication, seed definitions and `sync_server_time()` privileges) and classifies each migration as `FULLY_PRESENT`, `PARTIALLY_PRESENT`, `NOT_PRESENT` or `AMBIGUOUS`. Run it before any `migration repair`:
+
+```powershell
+node scripts/audit-supabase-migrations.js --env-file .env
+```
+
+It reads the connection string exactly like the runner and never prints it. Everything runs in one `BEGIN TRANSACTION READ ONLY` with `statement_timeout` 15s and `lock_timeout` 2s that is always rolled back; the session must confirm it is read-only before any audit query runs, and every audit statement is a fixed `SELECT` over `pg_catalog` with bound parameters, validated before it is sent. Application tables are read only for aggregate seed counts and, when no validated foreign key already proves it, one boolean per table for the `006` backfill. It refuses to run if a migration file no longer matches the hash its assertions were written for.
+
+TLS is verified. If verification fails, download the CA certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and add `--ca-file <path>`. Exit codes: `0` every migration fully present, `3` audit finished with other statuses, `1` no result, `2` invalid arguments. It never applies migrations, repairs history or changes data; record only a leading run of `FULLY_PRESENT` migrations, and only after reviewing the report.
+
+The tool uses the `pg` dev dependency. It is not part of the app bundle or the EAS fingerprint, but like any commit to `development` it triggers the existing preview OTA workflow.
 
 ### Sync cursor migrations (008, 009)
 
