@@ -16,10 +16,26 @@ if [[ -z "${EXPO_TOKEN:-}" ]]; then
   exit 1
 fi
 
+COMPATIBILITY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eas-build-compatibility.js"
+TARGET="$(node "$COMPATIBILITY" target --channel "$CHANNEL")"
+TARGET_ENVIRONMENT="$(sed -n 's/^environment=//p' <<<"$TARGET")"
+ALLOWED_PROFILES="$(sed -n 's/^allowed_profiles=//p' <<<"$TARGET")"
+if [[ "$ENVIRONMENT" != "$TARGET_ENVIRONMENT" ]]; then
+  echo "::error::Channel ${CHANNEL} publishes with environment ${TARGET_ENVIRONMENT}, not ${ENVIRONMENT}." >&2
+  exit 2
+fi
+if [[ ",${ALLOWED_PROFILES}," != *",${PROFILE},"* ]]; then
+  echo "::error::Build profile ${PROFILE} is not allowed for channel ${CHANNEL} (allowed: ${ALLOWED_PROFILES})." >&2
+  exit 2
+fi
+
 echo "Channel: $CHANNEL"
 echo "EAS environment: $ENVIRONMENT"
 echo "Android build profile: $PROFILE"
+echo "Android build profiles allowed to receive channel ${CHANNEL}: ${ALLOWED_PROFILES}"
 echo "Message: $MESSAGE"
+
+node "$COMPATIBILITY" profiles --channel "$CHANNEL"
 
 echo "Generating Android fingerprint for profile ${PROFILE}..."
 FINGERPRINT_JSON="$(eas fingerprint:generate --platform android --build-profile "$PROFILE" --json --non-interactive)"
@@ -39,31 +55,32 @@ HASH="$(
 
 echo "Android fingerprint: $HASH"
 
-echo "Looking for a finished Android build with this fingerprint..."
-BUILDS_JSON="$(eas build:list --platform android --fingerprint-hash "$HASH" --status finished --limit 20 --json --non-interactive)"
-MATCH_COUNT="$(
-  node -e '
-    const fs = require("fs");
-    const raw = fs.readFileSync(0, "utf8").trim() || "[]";
-    const parsed = JSON.parse(raw);
-    const builds = Array.isArray(parsed) ? parsed : parsed.builds || parsed.data || [];
-    process.stdout.write(String(builds.length));
-  ' <<<"$BUILDS_JSON"
-)"
+BUILD_LIMIT=50
+BUILDS_JSON="$(mktemp)"
+trap 'rm -f "$BUILDS_JSON"' EXIT
+echo "Looking for a finished Android build on channel ${CHANNEL} with this fingerprint..."
+eas build:list --platform android --fingerprint-hash "$HASH" --status finished --limit "$BUILD_LIMIT" --json --non-interactive > "$BUILDS_JSON"
 
-if [[ "$MATCH_COUNT" -eq 0 ]]; then
-  echo "::error::No finished Android build matches fingerprint ${HASH}."
-  echo "This JavaScript change requires a new native runtime/build."
-  echo "Installed APKs on channel ${CHANNEL} will not receive it."
-  echo "Build and install a replacement binary with the same package id and signing identity from a clean git tree:"
+set +e
+node "$COMPATIBILITY" check --channel "$CHANNEL" --fingerprint "$HASH" --builds-file "$BUILDS_JSON" --limit "$BUILD_LIMIT"
+CHECK_STATUS=$?
+set -e
+if [[ "$CHECK_STATUS" -ne 0 && "$CHECK_STATUS" -ne 1 ]]; then
+  echo "::error::The build compatibility check could not run (exit code ${CHECK_STATUS}). Nothing was published." >&2
+  exit "$CHECK_STATUS"
+fi
+if [[ "$CHECK_STATUS" -eq 1 ]]; then
+  echo "A build from another channel or profile never authorizes an update on channel ${CHANNEL}."
+  echo "Installed binaries on channel ${CHANNEL} would not receive this update, so it was not published."
+  echo "Build and install a replacement binary (profile ${ALLOWED_PROFILES//,/ or }) with the same package id and signing identity from a clean git tree:"
   echo "  npx eas-cli@latest build --profile ${PROFILE} --platform android"
-  echo "Then republish this commit after that APK finishes."
+  echo "Then republish this commit after that build finishes."
   echo "EAS Build uploads modified tracked files. Uncommitted icon, splash, or app.json native changes in that upload will not match this commit's fingerprint."
   echo "Compare sources with: eas fingerprint:compare ${HASH} --build-id <finished-android-build-id> --environment ${ENVIRONMENT}"
   exit 1
 fi
 
-echo "Found ${MATCH_COUNT} finished Android build(s) for this fingerprint. Publishing a compatible update..."
+echo "Publishing a compatible update..."
 eas update \
   --channel "$CHANNEL" \
   --environment "$ENVIRONMENT" \
@@ -72,4 +89,4 @@ eas update \
   --non-interactive
 
 echo "Published to channel ${CHANNEL} with EAS environment ${ENVIRONMENT}."
-echo "Installed APKs with fingerprint ${HASH} can download this update."
+echo "Installed ${ALLOWED_PROFILES//,/ or } binaries on channel ${CHANNEL} with fingerprint ${HASH} can download this update."

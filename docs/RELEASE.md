@@ -75,11 +75,22 @@ npx eas-cli@latest build --profile production --platform android
 
 GitHub:
 
-- Push to `development` → `validate`, then publish to EAS channel `preview` with environment `preview` if a finished Android build matches the current fingerprint.
+- Push to `development` → `validate`, then publish to EAS channel `preview` with environment `preview` if a finished `preview` Android build on channel `preview` matches the current fingerprint.
 - Open a pull request from `development` into `Production` → `validate` and `release-source` only. No OTA publish on the pull-request event.
-- Merge that PR → push to `Production` → `validate`, then publish to EAS channel `production` with environment `production` if the fingerprint has a finished Android build.
+- Merge that PR → push to `Production` → `validate`, then publish to EAS channel `production` with environment `production` if a finished `production-apk` or `production` Android build on channel `production` matches the current fingerprint.
 
-Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The publish job then takes a per-channel lock (`cancel-in-progress: false`). It generates the Android fingerprint with the matching EAS build profile (which binds the same EAS environment later passed to `eas update`), looks up a finished Android build for that fingerprint, then re-checks that SHA is still the branch tip immediately before `eas update`. Fingerprint CLI stdout is captured to a file so stderr stays visible; a missing `eas.json` profile, a fingerprint parse error, or no matching APK fails the job without claiming installed APKs received the change. Older queued commits are skipped instead of publishing over a newer release. In-flight production publishes are not cancelled. The update message is `sha:<commit>`.
+Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The publish job then takes a per-channel lock (`cancel-in-progress: false`). It generates the Android fingerprint with the matching EAS build profile (which binds the same EAS environment later passed to `eas update`), then re-checks that SHA is still the branch tip immediately before `eas update`. Fingerprint CLI stdout is captured to a file so stderr stays visible. Older queued commits are skipped instead of publishing over a newer release. In-flight production publishes are not cancelled. The update message is `sha:<commit>`.
+
+`scripts/eas-build-compatibility.js` decides whether an update may publish; the workflow and `scripts/publish-eas-update.sh` both use it. A build authorizes the update only when all of these hold:
+
+| Requirement | Preview update | Production update |
+| --- | --- | --- |
+| Status and platform | `FINISHED`, `ANDROID` | `FINISHED`, `ANDROID` |
+| Fingerprint hash and runtime version | equal to the commit's fingerprint | equal to the commit's fingerprint |
+| Build channel (`updateChannel.name`) | `preview` | `production` |
+| Build profile | `preview` | `production-apk` or `production` |
+
+A preview APK never authorizes a production update, and a production build never authorizes a preview update. Builds that recorded no channel or runtime (older builds) are rejected. Each allowed profile in `eas.json` must also build the target channel with the target environment. A missing profile, an unreadable build list, a fingerprint parse error, or no compatible build fails the job without publishing; the log lists each rejected build and why.
 
 Manual (after `npx tsc --noEmit` and `npx jest --no-coverage`):
 
@@ -156,7 +167,7 @@ Build and install a new APK (same package and signing identity, new version code
 - Native splash image/background
 - `runtimeVersion` / fingerprint inputs (native project files, autolinking, app config that affects native)
 
-The GitHub publish job reports this when `eas fingerprint:generate` does not match a finished Android build. Users on an older native runtime will not receive that JavaScript.
+The GitHub publish job reports this when `eas fingerprint:generate` does not match a finished Android build on the target channel. Users on an older native runtime will not receive that JavaScript.
 
 Replacement APK commands:
 
