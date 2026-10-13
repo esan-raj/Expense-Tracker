@@ -81,7 +81,7 @@ GitHub:
 
 Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The publish job then takes a per-channel lock (`cancel-in-progress: false`). It generates the Android fingerprint with the matching EAS build profile (which binds the same EAS environment later passed to `eas update`), then re-checks that SHA is still the branch tip immediately before `eas update`. Fingerprint CLI stdout is captured to a file so stderr stays visible. Older queued commits are skipped instead of publishing over a newer release. In-flight production publishes are not cancelled. The update message is `sha:<commit>`.
 
-`scripts/eas-build-compatibility.js` decides whether an update may publish; the workflow and `scripts/publish-eas-update.sh` both use it. A build authorizes the update only when all of these hold:
+`scripts/eas-build-compatibility.js` decides whether an update may publish; the workflow, `scripts/publish-eas-update.js` (the npm helpers) and `scripts/publish-eas-update.sh` all use it. A build authorizes the update only when all of these hold:
 
 | Requirement | Preview update | Production update |
 | --- | --- | --- |
@@ -92,21 +92,26 @@ Publication waits for `validate` (TypeScript and Jest) on the same git SHA. The 
 
 A preview APK never authorizes a production update, and a production build never authorizes a preview update. Builds that recorded no channel or runtime (older builds) are rejected. Each allowed profile in `eas.json` must also build the target channel with the target environment. A missing profile, an unreadable build list, a fingerprint parse error, or no compatible build fails the job without publishing; the log lists each rejected build and why.
 
-Manual (after `npx tsc --noEmit` and `npx jest --no-coverage`):
+Manual publishing (only if the GitHub publish job cannot run; requires `eas login`; works from PowerShell, cmd or bash):
 
 ```bash
-npx eas-cli@latest update --channel preview --environment preview --platform android --message "sha:$(git rev-parse HEAD)"
-npx eas-cli@latest update --channel production --environment production --platform android --message "sha:$(git rev-parse HEAD)"
-```
-
-npm helpers (still require EAS login):
-
-```bash
+npm run update:preview -- --dry-run
 npm run update:preview
+npm run update:production -- --dry-run
 npm run update:production
 ```
 
-Always pass `--environment` so `EXPO_PUBLIC_SUPABASE_*` come from the matching EAS environment, not from a developer laptop.
+These run `scripts/publish-eas-update.js`, which publishes only when all of the following hold. The script checks the branch, the clean tree and the tip again immediately before `eas update`, so nothing is published if any of them changed during the checks. `--dry-run` runs every check and stops before publishing. In Windows PowerShell, `npm run update:preview -- --dry-run` reaches npm as its own `--dry-run` setting rather than the script's argument; the script honours that too, so the command stays a dry run in every shell.
+
+- The current branch is the channel's branch (`development` for `preview`, `Production` for `production`).
+- `HEAD` is the freshly fetched tip of that branch on `origin`, so only pushed and CI-validated commits are published.
+- The working tree has no changes (generated `supabase/.temp/` state is ignored).
+- Every allowed `eas.json` profile builds the target channel and environment.
+- A compatible build exists on the target channel (table above).
+
+The update message is `sha:<commit>` and `--environment` is always passed, so `EXPO_PUBLIC_SUPABASE_*` come from the matching EAS environment, not from a developer laptop. Run `npx tsc --noEmit` and `npx jest --no-coverage` first.
+
+Emergency only: raw `npx eas-cli@latest update ...` skips every check above and can publish an update that no installed binary can receive, or ship uncommitted code. Do not use it for routine releases.
 
 ## GitHub required checks and Production protection
 
