@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { Button } from '@/components/ui/Button';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { CURRENCIES, getCurrency } from '@/constants/currencies';
@@ -36,7 +37,7 @@ export default function OnboardingScreen() {
       <View style={styles.content}>
         {step === 0 ? (
           <>
-            <Text style={[styles.kicker, { color: colors.primary }]}>SpendWise</Text>
+            <BrandLockup size={56} />
             <Text style={[styles.title, { color: colors.textPrimary }]}>Your money, clearly understood.</Text>
             <Text style={[styles.copy, { color: colors.textSecondary }]}>
               Track spending, set budgets, and understand your finances — all stored privately on your device.
@@ -86,7 +87,6 @@ export default function OnboardingScreen() {
 
 const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: 'center', gap: 18, paddingTop: 48 },
-  kicker: { fontSize: 16, fontWeight: '800', letterSpacing: 1 },
   title: { fontSize: 34, fontWeight: '800', letterSpacing: -0.8, lineHeight: 40 },
   copy: { fontSize: 16, lineHeight: 24 },
   list: { gap: 10 },

@@ -34,7 +34,18 @@ export async function migrateJsonSnapshot(db: SpendWiseDatabase): Promise<void> 
     const existing = await db.categories.count().exec();
     if (existing > 0) return;
 
-    const raw = await AsyncStorage.getItem(LEGACY_KEY);
+    // Legacy AsyncStorage bridge is only meaningful where a storage backend exists.
+    // Node/Jest (and some non-browser runners) can throw "window is not defined".
+    let raw: string | null = null;
+    try {
+      raw = await AsyncStorage.getItem(LEGACY_KEY);
+    } catch (storageError) {
+      const message = storageError instanceof Error ? storageError.message : String(storageError);
+      if (/window is not defined/i.test(message)) {
+        return;
+      }
+      throw storageError;
+    }
     if (!raw) return;
 
     const snapshot = JSON.parse(raw) as LegacySnapshot;

@@ -1,12 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSupabasePublicEnv, isSupabaseConfigured, logSupabaseConfig } from './supabase/config';
 
-const url = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+const { url, anonKey } = getSupabasePublicEnv();
+logSupabaseConfig();
 
-export function isSupabaseConfigured(): boolean {
-  return Boolean(url && anonKey && url.startsWith('http'));
-}
+export { isSupabaseConfigured };
 
 function createUnavailableClient(): SupabaseClient {
   return createClient('https://example.supabase.co', 'public-anon-key', {

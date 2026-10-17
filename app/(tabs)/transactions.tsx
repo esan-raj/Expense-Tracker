@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { PageScroll } from '@/components/ui/PageScroll';
 import { Input } from '@/components/ui/Input';
 import { ChipRow } from '@/components/ui/Chip';
 import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { ScreenSkeleton } from '@/components/ui/Skeleton';
@@ -22,18 +23,25 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { getCurrency } from '@/constants/currencies';
 import { parseAmountInput, toMinorUnits } from '@/utils/currency';
 import { getGroupLabel } from '@/utils/dates';
+import { accountTypeLabel } from '@/utils/accountLogic';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { PAYMENT_METHODS, SEARCH_DEBOUNCE_MS, SORT_OPTIONS } from '@/utils/constants';
 import { getDateRange, rangeToKeys, todayKey, type DateRangePreset } from '@/utils/dates';
 import { spacing } from '@/constants/theme';
-import type { PaymentMethod, TransactionSort } from '@/types';
+import type { PaymentMethod, TransactionSort, TransactionWithCategory } from '@/types';
 
 type KindFilter = 'all' | 'expense' | 'income' | 'transfer' | 'investment';
 
 export default function TransactionsScreen() {
   const { colors } = useTheme();
   const { isDesktop } = useBreakpoint();
-  const { items, loading, error, load, loadMore, setQuery, query } = useTransactionStore();
+  const items = useTransactionStore((state) => state.items);
+  const loading = useTransactionStore((state) => state.loading);
+  const error = useTransactionStore((state) => state.error);
+  const load = useTransactionStore((state) => state.load);
+  const loadMore = useTransactionStore((state) => state.loadMore);
+  const setQuery = useTransactionStore((state) => state.setQuery);
+  const query = useTransactionStore((state) => state.query);
   const categories = useCategoryStore((state) => state.categories);
   const accounts = useAccountStore((state) => state.accounts);
   const [search, setSearch] = useState(query.filters?.search ?? '');
@@ -87,6 +95,23 @@ export default function TransactionsScreen() {
     return [...groups.entries()].map(([date, data]) => ({ title: getGroupLabel(date), data }));
   }, [items]);
 
+  const openTransaction = useCallback((item: TransactionWithCategory) => {
+    router.push(`/transaction/${item.id}`);
+  }, []);
+
+  const openTransactionById = useCallback((id: string) => {
+    router.push(`/transaction/${id}`);
+  }, []);
+
+  const handleEndReached = useCallback(() => {
+    void loadMore();
+  }, [loadMore]);
+
+  const renderTransaction = useCallback(
+    ({ item }: { item: TransactionWithCategory }) => <TransactionRow item={item} onPress={openTransaction} />,
+    [openTransaction]
+  );
+
   const header = (
     <View style={styles.header}>
       <PageHeader
@@ -118,15 +143,21 @@ export default function TransactionsScreen() {
         <>
           <View style={styles.filters}>
             <View style={styles.flex}>
-              <Select
+              <SearchableSelect
                 label="Account"
                 value={query.filters?.accountId ?? 'all'}
-                options={[{ value: 'all', label: 'All accounts' }, ...accounts.map((item) => ({ value: item.id, label: item.name }))]}
+                options={[
+                  { value: 'all', label: 'All accounts' },
+                  ...accounts.map((item) => ({
+                    value: item.id,
+                    label: `${item.name} · ${accountTypeLabel(item.type)}`,
+                  })),
+                ]}
                 onChange={(value) => void setQuery({ filters: { accountId: value === 'all' ? undefined : value } })}
               />
             </View>
             <View style={styles.flex}>
-              <Select
+              <SearchableSelect
                 label="Category"
                 value={query.filters?.categoryId ?? 'all'}
                 options={[{ value: 'all', label: 'All categories' }, ...categories.map((item) => ({ value: item.id, label: item.name }))]}
@@ -255,7 +286,7 @@ export default function TransactionsScreen() {
         >
           {header}
           {empty}
-          {items.length > 0 ? <TransactionTable items={items} onPress={(id) => router.push(`/transaction/${id}`)} /> : null}
+          {items.length > 0 ? <TransactionTable items={items} onPress={openTransactionById} /> : null}
         </PageScroll>
       ) : (
         <SectionList
@@ -266,16 +297,18 @@ export default function TransactionsScreen() {
           ListEmptyComponent={empty}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
-          onEndReached={() => void loadMore()}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
+          onEndReached={handleEndReached}
           onEndReachedThreshold={0.4}
           renderSectionHeader={({ section }) => (
             <Text style={[styles.section, { color: colors.textSecondary, backgroundColor: colors.background }]}>
               {section.title}
             </Text>
           )}
-          renderItem={({ item }) => (
-            <TransactionRow item={item} onPress={() => router.push(`/transaction/${item.id}`)} />
-          )}
+          renderItem={renderTransaction}
         />
       )}
     </Screen>

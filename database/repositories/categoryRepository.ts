@@ -1,8 +1,9 @@
 import { getRxDatabase } from '@/database';
 import { compareValues } from '@/database/helpers';
-import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
+import { emptyToNull, nullToEmpty, ownerId, replacementQuery, scopeSelector, type ReplaceOptions } from '@/database/query';
 import type { Category, CategoryInput, CategoryType } from '@/types';
 import { categoryIdentityKey } from '@/utils/categoryDedupe';
+import { displayOptionLabel } from '@/utils/optionLabel';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
 import { mapCategory } from './mappers';
@@ -47,7 +48,7 @@ export const categoryRepository = {
     const timestamp = nowIso();
     await db.categories.insert({
       id,
-      name: input.name.trim(),
+      name: displayOptionLabel(input.name),
       icon: input.icon,
       color: input.color,
       type: input.type,
@@ -69,7 +70,7 @@ export const categoryRepository = {
     const row = await db.categories.findOne(id).exec();
     if (!row) throw new Error('Category not found');
     await row.incrementalPatch({
-      name: input.name.trim(),
+      name: displayOptionLabel(input.name),
       icon: input.icon,
       color: input.color,
       type: input.type,
@@ -93,12 +94,12 @@ export const categoryRepository = {
     return all.filter((item) => item.type === type || item.type === 'both');
   },
 
-  async replaceAll(items: Category[]): Promise<void> {
+  async replaceAll(items: Category[], options: ReplaceOptions = {}): Promise<void> {
     const db = await getRxDatabase();
-    const current = await db.categories.find().exec();
+    const current = await db.categories.find(replacementQuery(options)).exec();
     await Promise.all(current.map((row) => row.remove()));
     if (!items.length) return;
-    const userId = ownerId();
+    const userId = options.ownerId ?? ownerId();
     await db.categories.bulkInsert(
       items.map((item) => ({
         id: item.id,
@@ -143,6 +144,13 @@ export const categoryRepository = {
     const db = await getRxDatabase();
     const rows = await db.categories.find({ selector: { userId: '' } }).exec();
     await Promise.all(rows.map((row) => row.incrementalPatch({ userId })));
+  },
+
+  /** Active categories owned by this account; signed-out local rows (userId '') are excluded. */
+  async listActiveOwnedBy(userId: string): Promise<Array<Pick<Category, 'id' | 'isDefault'>>> {
+    const db = await getRxDatabase();
+    const rows = await db.categories.find({ selector: { userId, deletedAt: '' } }).exec();
+    return rows.map((row) => ({ id: row.id, isDefault: Boolean(row.isDefault) }));
   },
 
   async hide(id: string): Promise<void> {

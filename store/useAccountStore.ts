@@ -1,13 +1,13 @@
 import { create } from 'zustand';
 import { accountService } from '@/services/accountService';
-import type { AccountInput, AccountWithBalances } from '@/types';
+import type { Account, AccountInput, AccountWithBalances } from '@/types';
 
 interface AccountState {
   accounts: AccountWithBalances[];
   lastUsedId: string | null;
   loading: boolean;
   load: () => Promise<void>;
-  create: (input: AccountInput) => Promise<void>;
+  create: (input: AccountInput) => Promise<Account>;
   update: (id: string, input: AccountInput) => Promise<void>;
   archive: (id: string) => Promise<void>;
   reactivate: (id: string) => Promise<void>;
@@ -29,6 +29,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
     const created = await accountService.create(input);
     set({ lastUsedId: created.id });
     await get().load();
+    return created;
   },
   update: async (id, input) => {
     await accountService.update(id, input);

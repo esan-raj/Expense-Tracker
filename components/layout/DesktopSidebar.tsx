@@ -3,6 +3,7 @@ import { router, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { useAuthStore } from '@/store/useAuthStore';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { displayFirstName } from '@/utils/displayName';
 import { radius } from '@/constants/theme';
 
@@ -25,7 +26,7 @@ export function DesktopSidebar() {
 
   return (
     <View style={[styles.rail, { backgroundColor: colors.surface, borderRightColor: colors.border }]}>
-      <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+      <BrandLockup size={28} stacked={false} notchColor={colors.surface} style={styles.brand} />
       <View style={styles.nav}>
         {PRIMARY.map((item) => {
           const active = item.match.some((entry) => pathname === entry || pathname.startsWith(`${entry}/`));
@@ -72,7 +73,7 @@ export function DesktopSidebar() {
 
 const styles = StyleSheet.create({
   rail: { width: 220, height: '100%', paddingTop: 22, paddingHorizontal: 10, borderRightWidth: 1 },
-  brand: { fontSize: 18, fontWeight: '800', letterSpacing: -0.3, paddingHorizontal: 12, marginBottom: 18 },
+  brand: { paddingHorizontal: 8, marginBottom: 18 },
   nav: { flex: 1, gap: 2 },
   footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 10, gap: 2 },
   item: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, borderRadius: radius.md, paddingHorizontal: 12 },

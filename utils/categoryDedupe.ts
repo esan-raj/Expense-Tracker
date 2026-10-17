@@ -1,7 +1,8 @@
 import type { Category, CategoryType } from '@/types';
+import { normalizeOptionLabel } from '@/utils/optionLabel';
 
 export function categoryIdentityKey(name: string, type: CategoryType | string): string {
-  return `${name.trim().toLowerCase()}::${type}`;
+  return `${normalizeOptionLabel(name)}::${type}`;
 }
 
 export function chooseCanonicalCategory<T extends { id: string; createdAt: string }>(items: T[]): T {

@@ -3,11 +3,12 @@ import { recurringRepository } from '@/database/repositories/recurringRepository
 import { accountRepository } from '@/database/repositories/accountRepository';
 import { categoryRepository } from '@/database/repositories/categoryRepository';
 import { queueChange } from '@/services/outbox';
-import type { TransactionInput, TransactionQuery, TransactionWithCategory, TransferInput } from '@/types';
+import type { Transaction, TransactionInput, TransactionQuery, TransactionWithCategory, TransferInput } from '@/types';
 import { AppError, logError } from '@/utils/errors';
 import { addFrequency, fromDateKey, toDateKey } from '@/utils/dates';
 import { nowIso } from '@/utils/dates';
 import { createId } from '@/utils/id';
+import { transferLegTitles, transferPaymentMethod } from '@/utils/transfers';
 
 export const transactionService = {
   async create(input: TransactionInput): Promise<TransactionWithCategory> {
@@ -67,7 +68,9 @@ export const transactionService = {
     }
   },
 
-  async transfer(input: TransferInput): Promise<void> {
+  async transfer(input: TransferInput): Promise<{ sourceId: string; destinationId: string; transferGroupId: string }> {
+    let sourceTx: Transaction | null = null;
+    let destTx: Transaction | null = null;
     try {
       if (input.sourceAccountId === input.destinationAccountId) {
         throw new AppError('Choose two different accounts for a transfer.');
@@ -81,27 +84,28 @@ export const transactionService = {
       }
       const transferCategoryId = await ensureTransferCategoryId();
       const groupId = createId();
-      const title = input.title?.trim() || `Transfer to ${destination.name}`;
-      const sourceTx = await transactionRepository.create({
+      const titles = transferLegTitles(source, destination, input.title);
+      const paymentMethod = transferPaymentMethod(source.type, destination.type);
+      sourceTx = await transactionRepository.create({
         type: 'expense',
         amount: input.amount,
         categoryId: transferCategoryId,
-        title,
+        title: titles.sourceTitle,
         date: input.date,
-        paymentMethod: 'bank_transfer',
+        paymentMethod,
         notes: input.notes,
         accountId: source.id,
         isTransfer: true,
         transferGroupId: groupId,
         transferRole: 'source',
       });
-      const destTx = await transactionRepository.create({
+      destTx = await transactionRepository.create({
         type: 'income',
         amount: input.amount,
         categoryId: transferCategoryId,
-        title: input.title?.trim() || `Transfer from ${source.name}`,
+        title: titles.destTitle,
         date: input.date,
-        paymentMethod: 'bank_transfer',
+        paymentMethod,
         notes: input.notes,
         accountId: destination.id,
         isTransfer: true,
@@ -110,11 +114,101 @@ export const transactionService = {
       });
       await queueChange('transaction', sourceTx.id, 'create', sourceTx);
       await queueChange('transaction', destTx.id, 'create', destTx);
+      return { sourceId: sourceTx.id, destinationId: destTx.id, transferGroupId: groupId };
     } catch (error) {
+      if (sourceTx && !destTx) {
+        await transactionRepository.delete(sourceTx.id).catch((cleanupError) => {
+          logError('transaction.transfer.rollback', cleanupError);
+        });
+      }
       logError('transaction.transfer', error);
       if (error instanceof AppError) throw error;
       throw new AppError('We could not save this transfer.', error);
     }
+  },
+
+  async updateTransfer(id: string, input: TransferInput): Promise<void> {
+    const current = await transactionRepository.getById(id);
+    if (!current?.isTransfer || !current.transferGroupId) {
+      throw new AppError('This transfer could not be found.');
+    }
+    if (input.sourceAccountId === input.destinationAccountId) {
+      throw new AppError('Choose two different accounts for a transfer.');
+    }
+    const [source, destination, related] = await Promise.all([
+      accountRepository.getById(input.sourceAccountId),
+      accountRepository.getById(input.destinationAccountId),
+      transactionRepository.listByTransferGroup(current.transferGroupId),
+    ]);
+    if (!source || !destination) {
+      throw new AppError('One of the selected accounts could not be found.');
+    }
+    const sourceLeg = related.find((item) => item.transferRole === 'source');
+    const destLeg = related.find((item) => item.transferRole === 'destination');
+    if (!sourceLeg || !destLeg) {
+      throw new AppError('This transfer is missing a linked account.');
+    }
+    const transferCategoryId = sourceLeg.categoryId || destLeg.categoryId || (await ensureTransferCategoryId());
+    const titles = transferLegTitles(source, destination, input.title);
+    const paymentMethod = transferPaymentMethod(source.type, destination.type);
+    const previous = {
+      source: toTransactionInput(sourceLeg),
+      dest: toTransactionInput(destLeg),
+    };
+    try {
+      await transactionRepository.update(sourceLeg.id, {
+        type: 'expense',
+        amount: input.amount,
+        categoryId: transferCategoryId,
+        title: titles.sourceTitle,
+        date: input.date,
+        paymentMethod,
+        notes: input.notes,
+        accountId: source.id,
+        isTransfer: true,
+        transferGroupId: current.transferGroupId,
+        transferRole: 'source',
+      });
+      await transactionRepository.update(destLeg.id, {
+        type: 'income',
+        amount: input.amount,
+        categoryId: transferCategoryId,
+        title: titles.destTitle,
+        date: input.date,
+        paymentMethod,
+        notes: input.notes,
+        accountId: destination.id,
+        isTransfer: true,
+        transferGroupId: current.transferGroupId,
+        transferRole: 'destination',
+      });
+    } catch (error) {
+      await transactionRepository.update(sourceLeg.id, previous.source).catch((cleanupError) => {
+        logError('transaction.updateTransfer.rollbackSource', cleanupError);
+      });
+      await transactionRepository.update(destLeg.id, previous.dest).catch((cleanupError) => {
+        logError('transaction.updateTransfer.rollbackDest', cleanupError);
+      });
+      logError('transaction.updateTransfer', error);
+      if (error instanceof AppError) throw error;
+      throw new AppError('We could not update this transfer.', error);
+    }
+    const [updatedSource, updatedDest] = await Promise.all([
+      transactionRepository.getById(sourceLeg.id),
+      transactionRepository.getById(destLeg.id),
+    ]);
+    if (updatedSource) await queueChange('transaction', updatedSource.id, 'update', updatedSource);
+    if (updatedDest) await queueChange('transaction', updatedDest.id, 'update', updatedDest);
+  },
+
+  async getTransferPair(id: string): Promise<{ source: TransactionWithCategory; destination: TransactionWithCategory } | null> {
+    const current = await transactionRepository.getById(id);
+    if (!current?.isTransfer || !current.transferGroupId) return null;
+    const related = await transactionRepository.listByTransferGroup(current.transferGroupId);
+    const source = related.find((item) => item.transferRole === 'source');
+    const destination = related.find((item) => item.transferRole === 'destination');
+    if (!source || !destination) return null;
+    return { source, destination };
   },
 
   async delete(id: string): Promise<void> {
@@ -174,4 +268,23 @@ async function ensureTransferCategoryId(): Promise<string> {
   });
   await queueChange('category', created.id, 'create', created);
   return created.id;
+}
+
+function toTransactionInput(item: TransactionWithCategory): TransactionInput {
+  return {
+    type: item.type,
+    amount: item.amount,
+    categoryId: item.categoryId,
+    title: item.title,
+    description: item.description,
+    date: item.date,
+    paymentMethod: item.paymentMethod,
+    notes: item.notes,
+    isRecurring: item.isRecurring,
+    recurringId: item.recurringId,
+    accountId: item.accountId,
+    isTransfer: item.isTransfer,
+    transferGroupId: item.transferGroupId,
+    transferRole: item.transferRole,
+  };
 }

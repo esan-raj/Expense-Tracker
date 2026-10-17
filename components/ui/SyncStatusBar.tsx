@@ -9,7 +9,9 @@ import { radius, spacing } from '@/constants/theme';
 export function SyncStatusBar() {
   const { colors } = useTheme();
   const user = useAuthStore((state) => state.user);
-  const { status, lastSyncedAt, isOnline } = useSyncStore();
+  const status = useSyncStore((state) => state.status);
+  const lastSyncedAt = useSyncStore((state) => state.lastSyncedAt);
+  const isOnline = useSyncStore((state) => state.isOnline);
 
   const compact = !user
     ? '• Offline'

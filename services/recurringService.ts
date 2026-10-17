@@ -5,6 +5,7 @@ import type { RecurringInput } from '@/types';
 import { nowIso } from '@/utils/dates';
 import { AppError, logError } from '@/utils/errors';
 import { addFrequency, dueOccurrences, fromDateKey, toDateKey, todayKey } from '@/utils/dates';
+import { recurringOccurrenceId } from '@/utils/deterministicId';
 
 export const recurringService = {
   list() {
@@ -68,23 +69,41 @@ export const recurringService = {
       const dates = dueOccurrences(fromDateKey(item.nextDate), item.frequency, fromDateKey(today));
       for (const date of dates) {
         const dateKey = toDateKey(date);
-        const exists = await transactionRepository.existsForRecurringOnDate(item.id, dateKey);
-        if (exists) {
+        const occurrenceId = recurringOccurrenceId(item.id, dateKey);
+        const [exists, known] = await Promise.all([
+          transactionRepository.existsForRecurringOnDate(item.id, dateKey),
+          transactionRepository.getByIdIncludingDeleted(occurrenceId),
+        ]);
+        if (exists || known) {
           continue;
         }
-        const generated = await transactionRepository.create({
-          type: item.type,
-          amount: item.amount,
-          categoryId: item.categoryId,
-          title: item.title,
-          date: dateKey,
-          paymentMethod: item.paymentMethod,
-          notes: 'Generated from recurring transaction',
-          isRecurring: true,
-          recurringId: item.id,
-          accountId: item.accountId,
-        });
-        await queueChange('transaction', generated.id, 'create', generated);
+        const generated = await transactionRepository.create(
+          {
+            type: item.type,
+            amount: item.amount,
+            categoryId: item.categoryId,
+            title: item.title,
+            date: dateKey,
+            paymentMethod: item.paymentMethod,
+            notes: 'Generated from recurring transaction',
+            isRecurring: true,
+            recurringId: item.id,
+            accountId: item.accountId,
+          },
+          { id: occurrenceId }
+        );
+        try {
+          await queueChange('transaction', generated.id, 'create', generated);
+        } catch (error) {
+          // A local row without an outbox entry is skipped as "already generated" and never
+          // uploads. nextDate is not advanced yet, so the next run regenerates the same id.
+          try {
+            await transactionRepository.discardUnsyncedGeneratedOccurrence(generated);
+          } catch (rollbackError) {
+            logError('recurring.rollback', rollbackError);
+          }
+          throw error;
+        }
         created += 1;
       }
       const last = dates[dates.length - 1] ?? fromDateKey(item.nextDate);

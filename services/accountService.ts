@@ -1,5 +1,5 @@
 import { accountRepository } from '@/database/repositories/accountRepository';
-import { transactionRepository } from '@/database/repositories/transactionRepository';
+import { transactionRepository, type TransactionLedgerEntry } from '@/database/repositories/transactionRepository';
 import { queueChange } from '@/services/outbox';
 import type { Account, AccountInput, AccountWithBalances } from '@/types';
 import { calculateAccountBalances, calculateAssetExpenditure, getCreditCardSummary, isLiabilityAccount } from '@/utils/accountLogic';
@@ -7,35 +7,39 @@ import { accountBalanceSeries } from '@/utils/accountSeries';
 import { AppError, logError } from '@/utils/errors';
 import { nowIso } from '@/utils/dates';
 
-async function withBalances(account: Account): Promise<AccountWithBalances> {
-  const txs = await transactionRepository.query({
-    filters: { accountId: account.id },
-    limit: 10000,
-    offset: 0,
-  });
-  const entries = txs.map((item) => ({
-    type: item.type,
-    amount: item.amount,
-    accountId: item.accountId,
-    isTransfer: item.isTransfer,
-    transferRole: item.transferRole,
-    date: item.date,
-  }));
-  const balances = calculateAccountBalances(account, entries);
-  const card = isLiabilityAccount(account.type) ? getCreditCardSummary(account, entries) : null;
+function entriesForAccount(entries: TransactionLedgerEntry[], accountId: string): TransactionLedgerEntry[] {
+  return entries.filter((item) => item.accountId === accountId);
+}
+
+export function hydrateAccountBalances(account: Account, entries: TransactionLedgerEntry[]): AccountWithBalances {
+  const scoped = entriesForAccount(entries, account.id);
+  const balances = calculateAccountBalances(account, scoped);
+  const card = isLiabilityAccount(account.type) ? getCreditCardSummary(account, scoped) : null;
   return {
     ...account,
     ...balances,
-    expenditure: calculateAssetExpenditure(entries),
+    expenditure: calculateAssetExpenditure(scoped),
     utilizationPercent: card?.utilizationPercent ?? null,
-    balanceSeries: accountBalanceSeries(account, entries, 30),
+    balanceSeries: accountBalanceSeries(account, scoped, 30),
   };
+}
+
+export function hydrateAccounts(accounts: Account[], entries: TransactionLedgerEntry[]): AccountWithBalances[] {
+  return accounts.map((account) => hydrateAccountBalances(account, entries));
+}
+
+async function withBalances(account: Account): Promise<AccountWithBalances> {
+  const entries = await transactionRepository.listLedgerEntries(account.id);
+  return hydrateAccountBalances(account, entries);
 }
 
 export const accountService = {
   async list(includeInactive = true): Promise<AccountWithBalances[]> {
-    const accounts = await accountRepository.list(includeInactive);
-    return Promise.all(accounts.map(withBalances));
+    const [accounts, entries] = await Promise.all([
+      accountRepository.list(includeInactive),
+      transactionRepository.listLedgerEntries(),
+    ]);
+    return hydrateAccounts(accounts, entries);
   },
 
   async getById(id: string): Promise<AccountWithBalances> {

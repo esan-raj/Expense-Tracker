@@ -3,6 +3,7 @@ import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'r
 import { useTheme } from '@/hooks/useTheme';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { SpendWiseLogo } from '@/components/brand/SpendWiseLogo';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { ACCENT_PRESETS, normalizeHex } from '@/utils/accent';
 import { radius, spacing } from '@/constants/theme';
@@ -109,7 +110,10 @@ export function ThemeCustomizer({ visible, onClose }: { visible: boolean; onClos
 
           <Card elevated={false} style={[styles.preview, { backgroundColor: colors.surfaceSecondary }]}>
             <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>Preview</Text>
-            <Text style={{ color: colors.textPrimary, fontWeight: '800', marginTop: 6 }}>SpendWise</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <SpendWiseLogo size={28} notchColor={colors.surfaceSecondary} />
+              <Text style={{ color: colors.textPrimary, fontWeight: '800' }}>SpendWise</Text>
+            </View>
             <View style={[styles.previewBar, { backgroundColor: colors.primary }]} />
           </Card>
 

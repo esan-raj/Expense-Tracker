@@ -22,6 +22,23 @@ import {
   type RemoteRecurring,
   type RemoteTransaction,
 } from './mappers';
+import { normalizeServerTimestamp, type PullColumn } from '@/utils/syncLogic';
+import { decideGeneratedOccurrence } from '@/utils/recurringConflict';
+
+export type ServerTransaction = ReturnType<typeof fromRemoteTransaction>;
+
+export type GeneratedTransactionResult =
+  | { outcome: 'inserted'; remote: ServerTransaction }
+  | { outcome: 'updated_remote'; remote: ServerTransaction }
+  | { outcome: 'kept_remote'; remote: ServerTransaction }
+  | { outcome: 'deleted_remotely'; remote: ServerTransaction };
+
+/** Re-reads after a lost compare-and-set before giving up until the next sync. */
+const GENERATED_UPDATE_ATTEMPTS = 3;
+
+function isMissingFunction(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST202' || /could not find the function/i.test(error.message ?? '');
+}
 
 function isMissingTable(error: unknown): boolean {
   const record = error && typeof error === 'object' ? (error as { code?: unknown; message?: unknown }) : null;
@@ -50,6 +67,71 @@ export const remoteApi = {
     const userId = await requireUserId();
     const { error } = await supabase.from('transactions').upsert(toRemoteTransaction(item, userId));
     if (error) throw error;
+  },
+
+  /**
+   * Upload a generated recurring occurrence (deterministic id) without overwriting a copy
+   * another device already stored, edited or deleted. See decideGeneratedOccurrence for the
+   * rules. Every outcome returns the server row so the caller can converge the local copy.
+   */
+  async insertGeneratedTransaction(item: Transaction): Promise<GeneratedTransactionResult> {
+    const userId = await requireUserId();
+    const row = toRemoteTransaction(item, userId);
+    const inserted = await supabase
+      .from('transactions')
+      .upsert(row, { onConflict: 'id', ignoreDuplicates: true })
+      .select('*');
+    if (inserted.error) throw inserted.error;
+    const insertedRow = ((inserted.data ?? []) as RemoteTransaction[])[0];
+    if (insertedRow) return { outcome: 'inserted', remote: fromRemoteTransaction(insertedRow) };
+
+    for (let attempt = 0; attempt < GENERATED_UPDATE_ATTEMPTS; attempt += 1) {
+      const existing = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('id', row.id)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (existing.error) throw existing.error;
+      if (!existing.data) throw new Error('Generated transaction id conflicts with an inaccessible row.');
+      const current = existing.data as RemoteTransaction;
+      const decision = decideGeneratedOccurrence(item, { updatedAt: current.updated_at, deletedAt: current.deleted_at });
+      if (decision === 'deleted_remotely') return { outcome: 'deleted_remotely', remote: fromRemoteTransaction(current) };
+      if (decision === 'keep_remote') return { outcome: 'kept_remote', remote: fromRemoteTransaction(current) };
+
+      const changes: Partial<RemoteTransaction> = { ...row };
+      delete changes.id;
+      delete changes.created_at;
+      // Compare-and-set on the server's updated_at: an edit that lands between the read and
+      // this write makes it match nothing, and the loop re-decides against the new row.
+      const updated = await supabase
+        .from('transactions')
+        .update(changes)
+        .eq('id', row.id)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .eq('updated_at', current.updated_at)
+        .select('*');
+      if (updated.error) throw updated.error;
+      const updatedRow = ((updated.data ?? []) as RemoteTransaction[])[0];
+      if (updatedRow) return { outcome: 'updated_remote', remote: fromRemoteTransaction(updatedRow) };
+    }
+    throw new Error('Generated transaction changed on the server during upload.');
+  },
+
+  /**
+   * Server clock for the pull cursor, normalized to ISO-8601 UTC.
+   * null only while sync_server_time() is not deployed (before migration 008).
+   */
+  async serverTime(): Promise<string | null> {
+    const { data, error } = await supabase.rpc('sync_server_time');
+    if (error) {
+      if (isMissingFunction(error)) return null;
+      throw error;
+    }
+    const normalized = normalizeServerTimestamp(data);
+    if (!normalized) throw new Error('sync_server_time returned an invalid timestamp.');
+    return normalized;
   },
 
   async deleteTransaction(id: string, deletedAt: string): Promise<void> {
@@ -126,10 +208,10 @@ export const remoteApi = {
     if (error) throw error;
   },
 
-  async pullInvestments(since?: string | null): Promise<ReturnType<typeof fromRemoteInvestment>[]> {
+  async pullInvestments(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteInvestment>[]> {
     const userId = await requireUserId();
     let query = supabase.from('investments').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) {
       if (isMissingTable(error)) return [];
@@ -138,10 +220,10 @@ export const remoteApi = {
     return ((data ?? []) as RemoteInvestment[]).map(fromRemoteInvestment);
   },
 
-  async pullAccounts(since?: string | null): Promise<ReturnType<typeof fromRemoteAccount>[]> {
+  async pullAccounts(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteAccount>[]> {
     const userId = await requireUserId();
     let query = supabase.from('accounts').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteAccount[]).map(fromRemoteAccount);
@@ -169,37 +251,37 @@ export const remoteApi = {
     if (error) throw error;
   },
 
-  async pullTransactions(since?: string | null): Promise<ReturnType<typeof fromRemoteTransaction>[]> {
+  async pullTransactions(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteTransaction>[]> {
     const userId = await requireUserId();
     let query = supabase.from('transactions').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteTransaction[]).map(fromRemoteTransaction);
   },
 
-  async pullCategories(since?: string | null): Promise<ReturnType<typeof fromRemoteCategory>[]> {
+  async pullCategories(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteCategory>[]> {
     const userId = await requireUserId();
     let query = supabase.from('categories').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteCategory[]).map(fromRemoteCategory);
   },
 
-  async pullBudgets(since?: string | null): Promise<ReturnType<typeof fromRemoteBudget>[]> {
+  async pullBudgets(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteBudget>[]> {
     const userId = await requireUserId();
     let query = supabase.from('budgets').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteBudget[]).map(fromRemoteBudget);
   },
 
-  async pullRecurring(since?: string | null): Promise<ReturnType<typeof fromRemoteRecurring>[]> {
+  async pullRecurring(since?: string | null, column: PullColumn = 'updated_at'): Promise<ReturnType<typeof fromRemoteRecurring>[]> {
     const userId = await requireUserId();
     let query = supabase.from('recurring_transactions').select('*').eq('user_id', userId);
-    if (since) query = query.gte('updated_at', since);
+    if (since) query = query.gte(column, since);
     const { data, error } = await query;
     if (error) throw error;
     return ((data ?? []) as RemoteRecurring[]).map(fromRemoteRecurring);

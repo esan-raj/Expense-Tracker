@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
+import { getPersistedAuthSession } from '@/services/authLocalSession';
 import { getAuthSiteUrl, getPasswordResetRedirectUrl } from '@/utils/authRedirect';
 import { AppError, logError } from '@/utils/errors';
 import { mapAuthError } from '@/utils/syncLogic';
@@ -6,6 +7,8 @@ import type { User, Session } from '@supabase/supabase-js';
 
 export const authService = {
   configured: isSupabaseConfigured,
+
+  getPersistedSession: getPersistedAuthSession,
 
   async getSession(): Promise<Session | null> {
     if (!isSupabaseConfigured()) return null;

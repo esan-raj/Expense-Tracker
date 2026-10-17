@@ -1,12 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { StyleSheet, View } from 'react-native';
 import { CurrencyInput } from '@/components/ui/CurrencyInput';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
+import { router } from 'expo-router';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useAccountStore } from '@/store/useAccountStore';
 import { investmentFormSchema, type InvestmentFormValues } from '@/utils/validation';
@@ -14,6 +16,8 @@ import { fromMinorUnits, parseAmountInput, toMinorUnits } from '@/utils/currency
 import { getCurrency } from '@/constants/currencies';
 import { todayKey } from '@/utils/dates';
 import { INVESTMENT_TYPES, investmentTypeLabel, type Investment } from '@/types';
+import { accountTypeLabel } from '@/utils/accountLogic';
+import { useCriticalWork } from '@/hooks/useCriticalWork';
 
 interface InvestmentFormProps {
   initial?: Investment;
@@ -22,10 +26,14 @@ interface InvestmentFormProps {
 }
 
 export function InvestmentForm({ initial, submitting, onSubmit }: InvestmentFormProps) {
+  useCriticalWork('investment-form');
   const currencyCode = useSettingsStore((state) => state.settings.currency);
   const currency = getCurrency(currencyCode);
   const loadAccounts = useAccountStore((state) => state.load);
+  const lastUsedId = useAccountStore((state) => state.lastUsedId);
   const accounts = useAccountStore((state) => state.accounts);
+  const sawLastUsed = useRef(lastUsedId);
+
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
@@ -42,6 +50,12 @@ export function InvestmentForm({ initial, submitting, onSubmit }: InvestmentForm
       notes: initial?.notes ?? '',
     },
   });
+
+  useEffect(() => {
+    if (!lastUsedId || lastUsedId === sawLastUsed.current) return;
+    sawLastUsed.current = lastUsedId;
+    form.setValue('accountId', lastUsedId);
+  }, [form, lastUsedId]);
 
   return (
     <View style={styles.form}>
@@ -101,13 +115,20 @@ export function InvestmentForm({ initial, submitting, onSubmit }: InvestmentForm
           control={form.control}
           name="accountId"
           render={({ field, fieldState }) => (
-            <Select
+            <SearchableSelect
               label="Linked account (optional)"
               value={field.value || undefined}
               placeholder="None"
               onChange={field.onChange}
               error={fieldState.error?.message}
-              options={activeAccounts.map((item) => ({ value: item.id, label: item.name }))}
+              options={activeAccounts.map((item) => ({
+                value: item.id,
+                label: `${item.name} · ${accountTypeLabel(item.type)}`,
+              }))}
+              actions={[
+                { label: 'Add account', onPress: () => router.push('/accounts/add') },
+                { label: 'Add cash wallet', onPress: () => router.push({ pathname: '/accounts/add', params: { type: 'cash' } }) },
+              ]}
             />
           )}
         />

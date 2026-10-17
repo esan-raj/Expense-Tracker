@@ -79,6 +79,7 @@ export default function InvestmentsScreen() {
                 centerLabel="Portfolio"
                 centerValue={summary.currentValue}
                 slices={summary.byType.map((item, index) => ({
+                  id: item.type,
                   label: investmentTypeLabel(item.type),
                   amount: item.currentValue,
                   color: TYPE_COLORS[index % TYPE_COLORS.length],

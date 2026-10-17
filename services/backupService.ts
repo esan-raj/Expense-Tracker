@@ -5,7 +5,7 @@ import { recurringRepository } from '@/database/repositories/recurringRepository
 import { settingsRepository } from '@/database/repositories/settingsRepository';
 import { accountRepository } from '@/database/repositories/accountRepository';
 import { investmentRepository } from '@/database/repositories/investmentRepository';
-import { getRxDatabase } from '@/database';
+import { flushPersistentStorage, getRxDatabase } from '@/database';
 import { BACKUP_VERSION } from '@/utils/constants';
 import { AppError, logError } from '@/utils/errors';
 import { safeValidateBackup, type BackupPayload } from '@/utils/validation';
@@ -82,6 +82,7 @@ export const backupService = {
       await budgetRepository.replaceAll(payload.budgets);
       await settingsRepository.replace(payload.settings);
       await syncService.queueExistingLocal();
+      await flushPersistentStorage();
     } catch (error) {
       logError('backup.restore', error);
       throw new AppError('We could not restore this backup. Your existing data was kept.', error);

@@ -24,7 +24,8 @@ type CategoryTab = 'all' | 'expense' | 'income';
 
 export default function CategoriesScreen() {
   const { colors } = useTheme();
-  const { categories, remove } = useCategoryStore();
+  const categories = useCategoryStore((state) => state.categories);
+  const remove = useCategoryStore((state) => state.remove);
   const currency = useSettingsStore((state) => state.settings.currency);
   const [spend, setSpend] = useState<Record<string, { amount: number; percent: number }>>({});
   const [pendingId, setPendingId] = useState<string | null>(null);

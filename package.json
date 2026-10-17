@@ -10,8 +10,8 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "update:preview": "eas update --channel preview --environment preview --platform android --non-interactive",
-    "update:production": "eas update --channel production --environment production --platform android --non-interactive",
+    "update:preview": "node scripts/publish-eas-update.js --channel preview",
+    "update:production": "node scripts/publish-eas-update.js --channel production",
     "import:excel": "npx tsx scripts/import-excel.ts",
     "import:transactions": "npx tsx scripts/import-transactions-excel.ts",
     "dedupe:categories": "npx tsx scripts/dedupe-categories.ts",
@@ -62,6 +62,7 @@
     "@types/react": "~19.2.2",
     "exceljs": "^4.4.0",
     "jest": "^30.5.1",
+    "pg": "8.23.1",
     "ts-jest": "^29.4.12",
     "tsx": "^4.23.13",
     "typescript": "~6.0.3"

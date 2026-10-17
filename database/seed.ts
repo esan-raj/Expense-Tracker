@@ -9,25 +9,49 @@ import { ownerId } from './query';
 import type { SpendWiseDatabase } from './types';
 
 export async function seedDefaults(db: SpendWiseDatabase): Promise<void> {
-  const existing = await db.categories.find({ selector: { deletedAt: '' } }).exec();
-  const keys = new Set(existing.map((row) => categoryIdentityKey(row.name, row.type)));
-  const missing = DEFAULT_CATEGORIES.filter((category) => !keys.has(categoryIdentityKey(category.name, category.type)));
-  if (missing.length > 0) {
-    const createdAt = nowIso();
-    await db.categories.bulkInsert(
-      missing.map((category) => ({
-        id: createId(),
-        userId: '',
+  const active = await db.categories.find({ selector: { deletedAt: '' } }).exec();
+  const keys = new Set(active.map((row) => categoryIdentityKey(row.name, row.type)));
+  const softDeletedDefaults = (
+    await db.categories.find({ selector: { isDefault: true } }).exec()
+  ).filter((row) => Boolean(row.deletedAt));
+
+  const createdAt = nowIso();
+  const userId = ownerId();
+
+  for (const category of DEFAULT_CATEGORIES) {
+    const key = categoryIdentityKey(category.name, category.type);
+    if (keys.has(key)) continue;
+
+    const revive = softDeletedDefaults.find(
+      (row) => categoryIdentityKey(row.name, row.type) === key
+    );
+    if (revive) {
+      await revive.incrementalPatch({
+        deletedAt: '',
+        updatedAt: createdAt,
+        userId: revive.userId || userId,
         name: category.name,
         icon: category.icon,
         color: category.color,
         type: category.type,
-        isDefault: true,
-        createdAt,
-        updatedAt: createdAt,
-        deletedAt: '',
-      }))
-    );
+      });
+      keys.add(key);
+      continue;
+    }
+
+    await db.categories.insert({
+      id: createId(),
+      userId,
+      name: category.name,
+      icon: category.icon,
+      color: category.color,
+      type: category.type,
+      isDefault: true,
+      createdAt,
+      updatedAt: createdAt,
+      deletedAt: '',
+    });
+    keys.add(key);
   }
 
   const settings = await db.settings.findOne(SETTINGS_ID).exec();
@@ -77,31 +101,31 @@ export async function seedSampleData(db: SpendWiseDatabase): Promise<void> {
 
   await db.transactions.bulkInsert(
     samples.flatMap((sample) => {
-      const categoryId = byName[sample.category];
-      if (!categoryId) return [];
-      return [
-        {
-          id: createId(),
-          userId,
-          type: sample.type,
-          amount: toMinorUnits(sample.amount, 2),
-          categoryId,
-          title: sample.title,
-          description: '',
-          date: sample.date,
-          paymentMethod: sample.paymentMethod,
-          notes: sample.notes ?? '',
-          isRecurring: false,
-          recurringId: '',
-          createdAt,
-          updatedAt: createdAt,
-          deletedAt: '',
-          accountId: '',
-          isTransfer: false,
-          transferGroupId: '',
-          transferRole: '',
-        },
-      ];
+    const categoryId = byName[sample.category];
+    if (!categoryId) return [];
+    return [
+      {
+        id: createId(),
+        userId,
+        type: sample.type,
+        amount: toMinorUnits(sample.amount, 2),
+        categoryId,
+        title: sample.title,
+        description: '',
+        date: sample.date,
+        paymentMethod: sample.paymentMethod,
+        notes: sample.notes ?? '',
+        isRecurring: false,
+        recurringId: '',
+        createdAt,
+        updatedAt: createdAt,
+        deletedAt: '',
+        accountId: '',
+        isTransfer: false,
+        transferGroupId: '',
+        transferRole: '',
+      },
+    ];
     })
   );
 

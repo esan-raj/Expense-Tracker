@@ -37,10 +37,12 @@ export default function Root({ children }: { children: ReactNode }) {
 const responsiveBackground = `
 html, body, #root {
   height: 100%;
+  max-width: 100%;
 }
 #root {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 html, body {
   font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;

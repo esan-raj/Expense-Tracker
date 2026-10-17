@@ -1,7 +1,12 @@
+import { getRxDatabase } from '@/database';
+import { compareValues, enrichTransaction, loadLookups } from '@/database/helpers';
+import { accountRepository } from '@/database/repositories/accountRepository';
+import { mapTransactionWithCategory } from '@/database/repositories/mappers';
 import { transactionRepository } from '@/database/repositories/transactionRepository';
-import { accountService } from '@/services/accountService';
+import { hydrateAccounts } from '@/services/accountService';
 import { investmentService, summarizeInvestments } from '@/services/investmentService';
-import { excludeTransfers, isLiabilityAccount } from '@/utils/accountLogic';
+import type { TransferRole, TransactionType } from '@/types';
+import { excludeTransfers, isBankHolding, isCashHolding, isLiabilityAccount } from '@/utils/accountLogic';
 import {
   calculateAverageDailySpending,
   calculateSavingsRate,
@@ -10,6 +15,27 @@ import {
   getTopCategories,
 } from '@/utils/calculations';
 import { daysInRange, lastNDaysKeys, rangeToKeys, type DateRange } from '@/utils/dates';
+import type { TransactionDoc } from '@/database/types';
+
+function periodTotals(docs: TransactionDoc[], startDate?: string, endDate?: string): { income: number; expenses: number } {
+  return docs.reduce(
+    (acc, row) => {
+      if (row.isTransfer) return acc;
+      if (startDate && row.date < startDate) return acc;
+      if (endDate && row.date > endDate) return acc;
+      if (row.type === 'income') acc.income += row.amount;
+      if (row.type === 'expense') acc.expenses += row.amount;
+      return acc;
+    },
+    { income: 0, expenses: 0 }
+  );
+}
+
+function newestDocs(docs: TransactionDoc[]): TransactionDoc[] {
+  return [...docs].sort(
+    (a, b) => compareValues(b.date, a.date) || compareValues(b.createdAt, a.createdAt)
+  );
+}
 
 export const reportService = {
   async dashboard(month: number, year: number) {
@@ -20,35 +46,56 @@ export const reportService = {
     const prevStart = `${prev.year}-${String(prev.month).padStart(2, '0')}-01`;
     const prevLast = new Date(prev.year, prev.month, 0).getDate();
     const prevEnd = `${prev.year}-${String(prev.month).padStart(2, '0')}-${String(prevLast).padStart(2, '0')}`;
-
-    const [allTime, current, previous, recent, categories, weekKeys, accountRows, investments] = await Promise.all([
-      transactionRepository.totals(),
-      transactionRepository.totals(startDate, endDate),
-      transactionRepository.totals(prevStart, prevEnd),
-      transactionRepository.recent(5),
-      transactionRepository.categoryTotals('expense', startDate, endDate),
-      Promise.resolve(lastNDaysKeys(7)),
-      accountService.list(true),
-      investmentService.list(),
-    ]);
-
+    const weekKeys = lastNDaysKeys(7);
     const weekStart = weekKeys[0];
     const weekEnd = weekKeys[weekKeys.length - 1];
-    const weekDaily = await transactionRepository.dailyTotals('expense', weekStart, weekEnd);
-    const weekMap = Object.fromEntries(weekDaily.map((item) => [item.date, item.amount]));
-    const monthSeries = await Promise.all(
-      Array.from({ length: 6 }, (_, index) => {
-        const cursor = new Date(year, month - 6 + index, 1);
-        const seriesMonth = cursor.getMonth() + 1;
-        const seriesYear = cursor.getFullYear();
-        const seriesStart = `${seriesYear}-${String(seriesMonth).padStart(2, '0')}-01`;
-        const seriesEnd = `${seriesYear}-${String(seriesMonth).padStart(2, '0')}-${String(new Date(seriesYear, seriesMonth, 0).getDate()).padStart(2, '0')}`;
-        return transactionRepository.totals(seriesStart, seriesEnd).then((totals) => ({
-          date: seriesStart,
-          amount: totals.expenses,
-          label: cursor.toLocaleString('en-IN', { month: 'short' }),
-        }));
+
+    const db = await getRxDatabase();
+    const [docs, accounts, investments, lookups] = await Promise.all([
+      transactionRepository.listScopedDocs(),
+      accountRepository.list(true),
+      investmentService.list(),
+      loadLookups(db),
+    ]);
+
+    const allTime = periodTotals(docs);
+    const current = periodTotals(docs, startDate, endDate);
+    const previous = periodTotals(docs, prevStart, prevEnd);
+    const recent = newestDocs(docs)
+      .slice(0, 5)
+      .map((row) => mapTransactionWithCategory(enrichTransaction(lookups.categories, lookups.accounts, row)));
+
+    const monthCategoryRows = docs
+      .filter((row) => !row.isTransfer && row.type === 'expense' && row.date >= startDate && row.date <= endDate)
+      .map((row) => {
+        const category = lookups.categories.find((item) => item.id === row.categoryId);
+        return {
+          type: 'expense' as const,
+          amount: row.amount,
+          categoryId: row.categoryId,
+          categoryName: category?.name ?? '',
+          categoryIcon: category?.icon ?? '',
+          categoryColor: category?.color ?? '',
+        };
       })
+      .filter((row) => row.categoryName);
+
+    const weekMap: Record<string, number> = {};
+    for (const row of docs) {
+      if (row.isTransfer || row.type !== 'expense' || row.date < weekStart || row.date > weekEnd) continue;
+      weekMap[row.date] = (weekMap[row.date] ?? 0) + row.amount;
+    }
+
+    const accountRows = hydrateAccounts(
+      accounts,
+      docs.map((row) => ({
+        type: row.type as TransactionType,
+        amount: row.amount,
+        accountId: row.accountId || null,
+        isTransfer: row.isTransfer,
+        transferRole: (row.transferRole || null) as TransferRole | null,
+        date: row.date,
+      }))
     );
 
     return {
@@ -58,21 +105,11 @@ export const reportService = {
       previousIncome: previous.income,
       previousExpenses: previous.expenses,
       recent,
-      topCategories: getTopCategories(
-        categories.map((item) => ({
-          type: 'expense' as const,
-          amount: item.amount,
-          categoryId: item.categoryId,
-          categoryName: item.name,
-          categoryIcon: item.icon,
-          categoryColor: item.color,
-        })),
-        4
-      ),
+      topCategories: getTopCategories(monthCategoryRows, 4),
       weekSeries: weekKeys.map((date) => ({ date, amount: weekMap[date] ?? 0 })),
-      monthSeries,
       accounts: {
-        bankBalance: accountRows.filter((item) => !isLiabilityAccount(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
+        bankBalance: accountRows.filter((item) => isBankHolding(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
+        cashBalance: accountRows.filter((item) => isCashHolding(item.type)).reduce((sum, item) => sum + item.currentBalance, 0),
         creditOutstanding: accountRows.filter((item) => isLiabilityAccount(item.type)).reduce((sum, item) => sum + item.outstanding, 0),
         availableCredit: accountRows
           .filter((item) => isLiabilityAccount(item.type))

@@ -1,20 +1,24 @@
 import { useState } from 'react';
 import { Alert } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/components/ui/Screen';
 import { AccountForm } from '@/components/forms/AccountForm';
 import { useAccountStore } from '@/store/useAccountStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { toUserMessage } from '@/utils/errors';
+import { ACCOUNT_TYPES, type AccountType } from '@/types';
 
 export default function AddAccountScreen() {
   const create = useAccountStore((state) => state.create);
   const currency = useSettingsStore((state) => state.settings.currency);
+  const params = useLocalSearchParams<{ type?: string }>();
+  const defaultType = ACCOUNT_TYPES.includes(params.type as AccountType) ? (params.type as AccountType) : 'bank';
   const [submitting, setSubmitting] = useState(false);
 
   return (
     <Screen scroll>
       <AccountForm
+        defaultType={defaultType}
         submitting={submitting}
         onSubmit={async (values) => {
           setSubmitting(true);

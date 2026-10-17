@@ -6,6 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Screen } from '@/components/ui/Screen';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useCategoryStore } from '@/store/useCategoryStore';
@@ -34,7 +35,7 @@ export default function SignUpScreen() {
   return (
     <Screen scroll>
       <View style={styles.hero}>
-        <Text style={[styles.brand, { color: colors.primary }]}>SpendWise</Text>
+        <BrandLockup size={48} />
         <Text style={[styles.title, { color: colors.textPrimary }]}>Create account</Text>
         <Text style={[styles.copy, { color: colors.textSecondary }]}>Sync stays optional. Your data starts on this device.</Text>
       </View>
@@ -112,8 +113,7 @@ export default function SignUpScreen() {
 }
 
 const styles = StyleSheet.create({
-  hero: { marginBottom: 20, gap: 6 },
-  brand: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  hero: { marginBottom: 20, gap: 12 },
   title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
   copy: { fontSize: 15, lineHeight: 22 },
   switch: { textAlign: 'center', marginTop: 16 },

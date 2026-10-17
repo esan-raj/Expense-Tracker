@@ -26,6 +26,18 @@ export const categoryService = {
     }
   },
 
+  async createOrFind(input: CategoryInput): Promise<Category> {
+    const existing = await categoryRepository.findActiveByIdentity(input.name, input.type);
+    if (existing) return existing;
+    try {
+      return await this.create(input);
+    } catch (error) {
+      const raced = await categoryRepository.findActiveByIdentity(input.name, input.type);
+      if (raced) return raced;
+      throw error;
+    }
+  },
+
   async update(id: string, input: CategoryInput): Promise<Category> {
     try {
       const updated = await categoryRepository.update(id, input);

@@ -17,6 +17,7 @@ interface TransactionState {
   loadRecent: () => Promise<void>;
   create: (input: TransactionInput) => Promise<void>;
   transfer: (input: TransferInput) => Promise<void>;
+  updateTransfer: (id: string, input: TransferInput) => Promise<void>;
   update: (id: string, input: TransactionInput) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setQuery: (query: TransactionQuery) => Promise<void>;
@@ -74,6 +75,10 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   },
   transfer: async (input) => {
     await transactionService.transfer(input);
+    await Promise.all([get().load(get().query), get().loadRecent()]);
+  },
+  updateTransfer: async (id, input) => {
+    await transactionService.updateTransfer(id, input);
     await Promise.all([get().load(get().query), get().loadRecent()]);
   },
   update: async (id, input) => {

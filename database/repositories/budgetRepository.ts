@@ -1,5 +1,5 @@
 import { getRxDatabase } from '@/database';
-import { emptyToNull, nullToEmpty, ownerId, scopeSelector } from '@/database/query';
+import { emptyToNull, nullToEmpty, ownerId, replacementQuery, scopeSelector, type ReplaceOptions } from '@/database/query';
 import type { Budget, BudgetInput } from '@/types';
 import { createId } from '@/utils/id';
 import { nowIso } from '@/utils/dates';
@@ -103,12 +103,12 @@ export const budgetRepository = {
     return rows.map(toBudget);
   },
 
-  async replaceAll(items: Budget[]): Promise<void> {
+  async replaceAll(items: Budget[], options: ReplaceOptions = {}): Promise<void> {
     const db = await getRxDatabase();
-    const current = await db.budgets.find().exec();
+    const current = await db.budgets.find(replacementQuery(options)).exec();
     await Promise.all(current.map((row) => row.remove()));
     if (!items.length) return;
-    const userId = ownerId();
+    const userId = options.ownerId ?? ownerId();
     await db.budgets.bulkInsert(
       items.map((item) => ({
         id: item.id,
@@ -129,6 +129,11 @@ export const budgetRepository = {
     const rows = await db.budgets.find({ selector: scopeSelector() }).exec();
     const timestamp = nowIso();
     await Promise.all(rows.map((row) => row.incrementalPatch({ deletedAt: timestamp, updatedAt: timestamp })));
+  },
+
+  async countByCategory(categoryId: string): Promise<number> {
+    const db = await getRxDatabase();
+    return db.budgets.count({ selector: { categoryId, deletedAt: '' } }).exec();
   },
 
   async reassignCategory(fromId: string, toId: string): Promise<void> {
