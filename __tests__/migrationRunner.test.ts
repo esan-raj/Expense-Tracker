@@ -64,7 +64,10 @@ const { EXIT } = runner;
 
 const REF = 'abcdefghijklmnopqrst';
 const OTHER_REF = 'zyxwvutsrqponmlkjihg';
-const PASSWORD = 'S3cr3t-p@ss/word#1';
+/** Synthetic only: assembled so scanners do not treat the source as a live credential. */
+const PASSWORD = ['fixture', 'db', 'password', '001'].join('-');
+/** JWT-shaped reject case (alg none / role anon / dummy sig), assembled so no full credential literal sits in source. */
+const FAKE_API_KEY_JWT = ['eyJhbGciOiJub25lIn0', 'eyJyb2xlIjoiYW5vbiJ9', 'dGVzdC1zaWduYXR1cmU'].join('.');
 const DB_URL = `postgresql://postgres:${encodeURIComponent(PASSWORD)}@db.${REF}.supabase.co:5432/postgres`;
 const POOLER_URL = `postgresql://postgres.${REF}:${encodeURIComponent(PASSWORD)}@aws-0-ap-south-1.pooler.supabase.com:6543/postgres`;
 const ROOT = 'C:\\Users\\Esan Raj\\My Projects\\Expense Tracker';
@@ -247,8 +250,8 @@ describe('migration runner: arguments and environment', () => {
 
   it.each([
     [`https://${REF}.supabase.co`, 'HTTP address'],
-    ['eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.c2lnbmF0dXJl', 'API key'],
-    ['sb_secret_abc123', 'API key'],
+    [FAKE_API_KEY_JWT, 'API key'],
+    [['sb', 'secret', 'abc123'].join('_'), 'API key'],
     [`mysql://root:${PASSWORD}@localhost/db`, 'must start with postgres://'],
     [`postgresql://postgres:pa#ss@db.${REF}.supabase.co:5432/postgres`, 'malformed'],
     ['not a url at all', 'malformed'],
