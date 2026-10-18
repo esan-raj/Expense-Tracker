@@ -20,7 +20,7 @@ Verified against the current codebase (do not invent fields):
 | Transactions | `type` (`expense` \| `income`), `title`, `description`, `notes`, `date` (`YYYY-MM-DD`), `categoryId`, `accountId`, `paymentMethod`, transfer flags — **no dedicated `merchant` column** |
 | “Merchant” for AI | **Mapped to redacted `title`** (and optionally a short `description` that may leave the device **only after deterministic PII redaction** — see D2/D4). Proposed rename/field is out of scope |
 | Categories | User + default categories with `name`, `icon`, `color`, `type` |
-| Budgets | Per-category budgets (`categoryId`) and overall budget via **two existing sources** (`settings.monthlyBudget` and budget rows with `categoryId === null`) — **blocking Phase 2 decision**, see K |
+| Budgets | Per-category budgets (`categoryId`) and overall budget via two existing sources; **analytics canonical = null-`categoryId` row**, fallback `settings.monthlyBudget` (see K1) |
 | Reports | Deterministic `reportService.dashboard` / `reportService.analytics` + `utils/calculations.ts` |
 | Privacy copy | Local RxDB first; optional sync to the user’s Supabase project; **no analytics/ads SDKs**; export/backup only on demand |
 | AI / SMS / notifications | **None** in the app today — no provider SDK, no notification listener, no SMS reader |
@@ -508,17 +508,32 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 | Sync/auth session gates | `store/useAuthStore.ts`, `store/useSyncStore.ts` |
 | Finance revision bump (stale signal) | `services/financeRevision.ts` (**Proposed** AI stale hook) |
 
-**Proposed (not in repo yet):** AI settings fields, Edge Function, AI service module, UI surfaces, outbound redaction helper, response validator.
+**Phase 2 local analytics (implemented, no AI network):** `services/financialIntelligence/` — pure snapshot builders (`buildFinancialSnapshot`, aggregates, trends, recurring patterns, anomalies, budget baseline, overall-budget resolution). Still **proposed** for later phases: AI settings fields, Edge Function, AI service module, UI surfaces, outbound redaction helper, response validator.
 
 ---
 
 ## K. Risks and unresolved questions
 
-### K1. Blocking Phase 2 architecture decision
+### K1. Overall-budget source — Phase 2 decision (resolved)
 
-| Item | Status |
+| Item | Decision |
 | --- | --- |
-| **Dual overall-budget source** | **Blocking.** The app today reads overall budget from both `settings.monthlyBudget` and budget rows with `categoryId === null` (see Home/Budgets UI). Phase 2 **must** choose a single authoritative source (or an explicit precedence rule) for AI snapshots and budget suggestions **before** implementing those capabilities. Shipping AI against ambiguous totals is not allowed. |
+| **Dual overall-budget source** | **Resolved for analytics reads (no migration).** |
+
+**Current behaviour (evidence):**
+
+| Source | Where written | Where read | Scoped? | Synced? |
+| --- | --- | --- | --- | --- |
+| Budget row `categoryId === null` | Budgets UI / `BudgetForm` “Overall monthly budget” via `budgetService.create/update` | Budgets tab hero; `budgetService.listWithUsage`; `findOverallBudget`; Home **prefers** this | Per `month`+`year` | Yes (budget outbox) |
+| `settings.monthlyBudget` | Onboarding; Settings → Currency | Home **fallback**; profile sync `monthly_budget` | Global (not month-scoped) | Yes (settings/profile) |
+
+**Canonical read for `services/financialIntelligence` snapshots:** the null-`categoryId` budget row for the snapshot period, when `amount > 0`.
+
+**Backwards-compatible fallback:** if that row is absent or non-positive, use `settings.monthlyBudget` when `> 0` (`source: 'settings_fallback'`). If neither qualifies, `amountMinor: null` / `source: 'none'`.
+
+**When both differ:** the budget row wins (matches Home’s preference and the month-scoped Budgets UI). Settings is not overwritten or deleted.
+
+**Explicitly not done in Phase 2:** RxDB/Supabase migration, merging the two stores, or changing Home/Budgets UI write paths. Implementation: `resolveOverallBudgetMinor` in `services/financialIntelligence/`.
 
 ### K2. Unresolved decisions (remain open; not decided by Phase 1)
 
@@ -541,6 +556,13 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 - [x] Provider-neutral schemas + examples defined
 - [x] UX, failure, tests, decision log captured
 - [x] Aligned to real RxDB fields (gaps marked Proposed)
-- [ ] Human review approval → then Phase 2 implementation plan
+- [x] Human review of Phase 1 → Phase 2 deterministic analytics implemented on `feature/ai-finance-assistant`
 
-**Phase 1 is ready for review.** No implementation, dependency, migration, Edge Function, build, OTA, or database change is authorized by this document alone.
+### Phase 2 exit criteria (deterministic analytics)
+
+- [x] Overall-budget canonical source decided with fallback (K1)
+- [x] `services/financialIntelligence/` local snapshot contract
+- [x] Unit tests for overall-budget matrix + transfer exclusion + snapshot stability
+- [ ] AI provider / Edge Function / UI — **not** in Phase 2
+
+No Edge Function, provider SDK, migration, OTA, or Production change is authorized by Phase 2 alone.
