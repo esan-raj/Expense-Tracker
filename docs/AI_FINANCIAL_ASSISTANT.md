@@ -518,7 +518,18 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 | Period averages | Active month → elapsed calendar days; completed → full month length; future → average/projection unavailable. Projected month-end expense (`linear_elapsed`) only for active months with expenses. |
 | Adapter | `adaptFinancialSnapshotInput` — structural reject vs per-row skip (documented); soft-delete defence; global currency assumption; caller-scoped inputs. |
 
-Still **proposed** for later phases: AI settings fields, Edge Function, AI provider SDK, UI surfaces, merchant-categorisation redaction helper, response validator. Do not send `LocalFinancialSnapshot` on the wire.
+**Phase 3 Edge Function foundation (implemented, not deployed):** `supabase/functions/financial-assistant/` — see [AI_PHASE3_EDGE_DECISIONS.md](./AI_PHASE3_EDGE_DECISIONS.md).
+
+| Piece | Role |
+| --- | --- |
+| `financial-assistant` | Single capability-routed function (`monthly_summary`, `budget_suggestions`, `categorize_merchant`) |
+| Auth | User JWT required (`verify_jwt = true` + `auth.getUser`); API keys as Bearer rejected |
+| Wire for summary/budgets | **Only** `AiSafeFinancialSnapshot` (`kind: 'ai_safe'`) — `LocalFinancialSnapshot` rejected |
+| Wire for categorize | Separate redacted merchant payload; server re-checks D4-like patterns |
+| Provider | `FinancialAiProvider` + default `UnavailableFinancialAiProvider` (`FINANCIAL_AI_PROVIDER=unavailable`) — no paid vendor SDK |
+| Limits | 8 KiB request / 16 KiB response UTF-8; best-effort in-memory rate limit |
+
+Still **proposed**: deploy, chosen AI provider adapter, client invoke module, AI settings/opt-in UI, response UI, merchant redaction helper on device. Do not send `LocalFinancialSnapshot` on the wire.
 
 ---
 
@@ -574,6 +585,14 @@ Still **proposed** for later phases: AI settings fields, Edge Function, AI provi
 - [x] `LocalFinancialSnapshot` + `AiSafeFinancialSnapshot` separation (local never described as AI-safe)
 - [x] Canonical `contentRevision`, active-month averages/projection, input adapter, stable ordering, 8 KiB AI-safe boundary
 - [x] Unit tests for overall-budget matrix, transfers, cash, soft-delete skip, period status, revision, AI-safe privacy/size
-- [ ] AI provider / Edge Function / UI — **not** in Phase 2
+- [x] AI provider / Edge Function / UI — **not** in Phase 2 (Edge foundation moved to Phase 3)
 
-No Edge Function, provider SDK, migration, OTA, or Production change is authorized by Phase 2 alone.
+No Edge Function deploy, paid provider SDK, migration, OTA, or Production change is authorized by Phase 2 alone.
+
+### Phase 3 exit criteria (Edge Function foundation)
+
+- [x] Provider-neutral `FinancialAiProvider` + unavailable stub (no paid calls)
+- [x] Auth + size + privacy validation for three capabilities
+- [x] `AiSafeFinancialSnapshot`-only for summary/budgets; separate categorize contract
+- [x] Unit tests for auth, privacy, validation, rate limit, stub provider
+- [ ] Deploy / chosen provider / UI — **not** in Phase 3
