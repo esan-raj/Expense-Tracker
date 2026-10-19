@@ -6,11 +6,12 @@ import type { Period, SnapshotCategory, SnapshotTransaction, TrendSignal } from 
 export function detectTrends(
   transactions: SnapshotTransaction[],
   period: Period,
-  categories: SnapshotCategory[]
+  categories: SnapshotCategory[],
+  now: Date
 ): TrendSignal[] {
   const previous = previousPeriod(period);
-  const currentTotals = aggregatePeriodTotals(transactions, period);
-  const previousTotals = aggregatePeriodTotals(transactions, previous);
+  const currentTotals = aggregatePeriodTotals(transactions, period, now);
+  const previousTotals = aggregatePeriodTotals(transactions, previous, now);
   const signals: TrendSignal[] = [
     {
       kind: 'expense_change',
@@ -35,22 +36,32 @@ export function detectTrends(
     },
   ];
 
-  const currentCats = aggregateCategorySpend(transactions, period, categories, 5);
+  const currentCats = aggregateCategorySpend(transactions, period, categories, 5).rows;
   const previousCats = new Map(
-    aggregateCategorySpend(transactions, previous, categories, 50).map((row) => [row.categoryId, row.amountMinor])
+    aggregateCategorySpend(transactions, previous, categories, 50).rows.map((row) => [
+      row.categoryId,
+      row.amountMinor,
+    ])
   );
 
-  for (const row of currentCats.slice(0, 3)) {
+  const categorySignals: TrendSignal[] = currentCats.slice(0, 3).map((row) => {
     const prevAmount = previousCats.get(row.categoryId) ?? 0;
-    signals.push({
-      kind: 'category_change',
+    return {
+      kind: 'category_change' as const,
       label: `${row.categoryName} vs prior month`,
       currentMinor: row.amountMinor,
       previousMinor: prevAmount,
       percentChange: percentChange(row.amountMinor, prevAmount),
       categoryId: row.categoryId,
-    });
-  }
+    };
+  });
 
-  return signals;
+  categorySignals.sort(
+    (a, b) =>
+      Math.abs(b.percentChange ?? 0) - Math.abs(a.percentChange ?? 0) ||
+      (a.categoryId ?? '').localeCompare(b.categoryId ?? '') ||
+      a.label.localeCompare(b.label)
+  );
+
+  return [...signals, ...categorySignals];
 }

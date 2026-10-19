@@ -1,23 +1,64 @@
 import { getFinanceRevision } from '@/services/financeRevision';
 import type { FinancialSnapshotInput } from './types';
 
-/** Stable non-cryptographic fingerprint of the financial content used in a snapshot. */
-export function computeContentRevision(input: Omit<FinancialSnapshotInput, 'snapshotId' | 'now'>): string {
-  const operational = input.transactions.filter((row) => !row.isTransfer);
+/**
+ * Cache/staleness fingerprint of analytics-relevant inputs.
+ *
+ * This is NOT a security hash, integrity MAC, or privacy guarantee. It only detects
+ * whether recomputation is needed when inputs change. Collisions are theoretically
+ * possible (FNV-1a 32-bit) but acceptable for local cache invalidation.
+ *
+ * `now` and `snapshotComputedAt` must never be included — only content that affects
+ * analytics results (plus explicit scope identifiers).
+ */
+export function computeContentRevision(
+  input: Omit<FinancialSnapshotInput, 'snapshotId' | 'now'>
+): string {
+  const txLines = input.transactions
+    .map(
+      (row) =>
+        [
+          row.date,
+          row.type,
+          row.amount,
+          row.categoryId,
+          row.isTransfer ? '1' : '0',
+          row.isRecurring ? '1' : '0',
+          normalizeTitleKey(row.title),
+          row.paymentMethod ?? '',
+        ].join(':')
+    )
+    .sort();
+
+  const budgetLines = input.budgets
+    .map(
+      (budget) =>
+        [
+          budget.year,
+          String(budget.month).padStart(2, '0'),
+          budget.categoryId ?? 'overall',
+          budget.amount,
+          budget.id,
+        ].join(':')
+    )
+    .sort();
+
+  const categoryLines = input.categories
+    .map((category) => [category.id, category.type, category.name].join(':'))
+    .sort();
+
   const parts = [
-    `${input.period.year}-${input.period.month}`,
-    input.currency,
-    String(input.settingsMonthlyBudget ?? ''),
-    `tx:${operational.length}`,
-    `sum:${operational.reduce((acc, row) => acc + row.amount * (row.type === 'expense' ? -1 : 1), 0)}`,
-    `budgets:${input.budgets
-      .map((budget) => `${budget.categoryId ?? 'overall'}:${budget.month}:${budget.year}:${budget.amount}`)
-      .sort()
-      .join(',')}`,
-    `cats:${input.categories.map((category) => category.id).sort().join(',')}`,
+    `period:${input.period.year}-${String(input.period.month).padStart(2, '0')}`,
+    `currency:${input.currency}`,
+    `settingsBudget:${input.settingsMonthlyBudget ?? ''}`,
     `lookback:${input.lookbackMonths ?? 3}`,
+    `scope:${input.accountScopeId ?? ''}`,
+    `tx:${txLines.join('|')}`,
+    `budgets:${budgetLines.join('|')}`,
+    `cats:${categoryLines.join('|')}`,
   ];
-  return fnv1a(parts.join('|'));
+
+  return fnv1a(parts.join('\n'));
 }
 
 export function resolveFinanceRevision(explicit?: number): number {
@@ -27,6 +68,10 @@ export function resolveFinanceRevision(explicit?: number): number {
 export function buildSnapshotId(contentRevision: string, financeRevision: number, explicit?: string): string {
   if (explicit) return explicit;
   return `snap_${contentRevision}_${financeRevision}`;
+}
+
+function normalizeTitleKey(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function fnv1a(value: string): string {

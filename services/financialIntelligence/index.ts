@@ -1,14 +1,25 @@
 export type {
+  AiSafeAnomalySignal,
+  AiSafeFinancialSnapshot,
+  AiSafeRecurringPattern,
+  AiSafeTruncation,
   AnomalySignal,
+  AverageDailyMethod,
   BudgetBaseline,
   BudgetBaselineCategory,
   BudgetUsageRow,
   CategorySpendRow,
+  DataQualityFlags,
   FinancialSnapshot,
   FinancialSnapshotInput,
+  LocalAnomalySignal,
+  LocalFinancialSnapshot,
+  LocalRecurringPattern,
   OverallBudgetSource,
   Period,
+  PeriodStatus,
   PeriodTotals,
+  ProjectionMethod,
   RecurringPattern,
   SnapshotBudget,
   SnapshotCategory,
@@ -17,7 +28,19 @@ export type {
   Volatility,
 } from './types';
 
+export { AI_SAFE_MAX_UTF8_BYTES } from './types';
+
 export { buildFinancialSnapshot } from './buildFinancialSnapshot';
+export {
+  buildAiSafeFinancialSnapshot,
+  collectProhibitedPaths,
+  AI_SAFE_PROHIBITED_KEYS,
+  utf8ByteLength,
+} from './buildAiSafeFinancialSnapshot';
+export {
+  adaptFinancialSnapshotInput,
+  type RawFinancialSnapshotSource,
+} from './adaptFinancialSnapshotInput';
 export {
   aggregateCategorySpend,
   aggregatePeriodTotals,
@@ -35,4 +58,18 @@ export {
   computeContentRevision,
   resolveFinanceRevision,
 } from './snapshotRevision';
-export { lookbackPeriods, periodBounds, periodPrefix, previousPeriod } from './periodBounds';
+export {
+  averageDivisorDays,
+  classifyPeriod,
+  lookbackPeriods,
+  periodBounds,
+  periodPrefix,
+  previousPeriod,
+} from './periodBounds';
+export { amountBucket } from './amountBuckets';
+export {
+  FinancialSnapshotValidationError,
+  assertSafeInteger,
+  safeAdd,
+  safeMultiply,
+} from './integerSafety';

@@ -1,8 +1,8 @@
 # SpendWise AI Financial Assistant — Phase 1 scope
 
-Status: **Phase 1 — design only (not implemented)**  
-Branch base: `origin/development` (`d695057`) via `feature/ai-finance-assistant`  
-Audience: product, privacy, RN client, Supabase backend, QA  
+Status: **Phase 1 scope + Phase 2 local analytics (corrective)** — no AI network yet
+Branch base: `origin/development` (`d695057`) via `feature/ai-finance-assistant`
+Audience: product, privacy, RN client, Supabase backend, QA
 Related docs: [RELEASE.md](./RELEASE.md), in-app Privacy (`app/settings/privacy.tsx`)
 
 This document defines the **first AI release scope**. It does not authorize dependencies, Edge Functions, RxDB/Supabase migrations, native modules, OTA, or UI work. Those belong to Phase 2+ after this document is approved.
@@ -508,7 +508,17 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 | Sync/auth session gates | `store/useAuthStore.ts`, `store/useSyncStore.ts` |
 | Finance revision bump (stale signal) | `services/financeRevision.ts` (**Proposed** AI stale hook) |
 
-**Phase 2 local analytics (implemented, no AI network):** `services/financialIntelligence/` — pure snapshot builders (`buildFinancialSnapshot`, aggregates, trends, recurring patterns, anomalies, budget baseline, overall-budget resolution). Still **proposed** for later phases: AI settings fields, Edge Function, AI service module, UI surfaces, outbound redaction helper, response validator.
+**Phase 2 local analytics (implemented, no AI network):** `services/financialIntelligence/`.
+
+| Contract | Role |
+| --- | --- |
+| `LocalFinancialSnapshot` via `buildFinancialSnapshot` | On-device diagnostics only. May retain title-derived recurring/anomaly evidence. **Never** treat as an AI request envelope. |
+| `AiSafeFinancialSnapshot` via `buildAiSafeFinancialSnapshot(local)` | Aggregate/redacted outbound shape only. Excludes raw titles, title keys, sample merchants, descriptions/notes, transaction/account/user IDs, SMS. Recurring/anomaly evidence is category + counts + amount buckets + multiples. UTF-8 size capped at **8 KiB** with deterministic truncation; fail-closed if still over limit. |
+| `contentRevision` | Cache/staleness fingerprint of sorted canonical analytics inputs. **Not** a security hash. Unaffected by `now` / `snapshotComputedAt`. |
+| Period averages | Active month → elapsed calendar days; completed → full month length; future → average/projection unavailable. Projected month-end expense (`linear_elapsed`) only for active months with expenses. |
+| Adapter | `adaptFinancialSnapshotInput` — structural reject vs per-row skip (documented); soft-delete defence; global currency assumption; caller-scoped inputs. |
+
+Still **proposed** for later phases: AI settings fields, Edge Function, AI provider SDK, UI surfaces, merchant-categorisation redaction helper, response validator. Do not send `LocalFinancialSnapshot` on the wire.
 
 ---
 
@@ -561,8 +571,9 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 ### Phase 2 exit criteria (deterministic analytics)
 
 - [x] Overall-budget canonical source decided with fallback (K1)
-- [x] `services/financialIntelligence/` local snapshot contract
-- [x] Unit tests for overall-budget matrix + transfer exclusion + snapshot stability
+- [x] `LocalFinancialSnapshot` + `AiSafeFinancialSnapshot` separation (local never described as AI-safe)
+- [x] Canonical `contentRevision`, active-month averages/projection, input adapter, stable ordering, 8 KiB AI-safe boundary
+- [x] Unit tests for overall-budget matrix, transfers, cash, soft-delete skip, period status, revision, AI-safe privacy/size
 - [ ] AI provider / Edge Function / UI — **not** in Phase 2
 
 No Edge Function, provider SDK, migration, OTA, or Production change is authorized by Phase 2 alone.

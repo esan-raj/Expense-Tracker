@@ -1,5 +1,5 @@
 import { filterPeriodTransactions } from './aggregateSpending';
-import type { AnomalySignal, Period, SnapshotCategory, SnapshotTransaction } from './types';
+import type { LocalAnomalySignal, Period, SnapshotCategory, SnapshotTransaction } from './types';
 
 const MULTIPLE_THRESHOLD = 2.5;
 const MIN_CATEGORY_SAMPLES = 3;
@@ -7,12 +7,13 @@ const MIN_CATEGORY_SAMPLES = 3;
 /**
  * Flags period expenses that are unusually large vs the category's average
  * in the same period (excluding the candidate itself when enough samples exist).
+ * Local-only evidence may include titles/dates — never send as AI envelope.
  */
 export function detectAnomalies(
   transactions: SnapshotTransaction[],
   period: Period,
   categories: SnapshotCategory[]
-): AnomalySignal[] {
+): LocalAnomalySignal[] {
   const names = new Map(categories.map((category) => [category.id, category.name]));
   const expenses = filterPeriodTransactions(transactions, period).filter((row) => row.type === 'expense');
   const byCategory = new Map<string, SnapshotTransaction[]>();
@@ -22,7 +23,7 @@ export function detectAnomalies(
     byCategory.set(row.categoryId, list);
   }
 
-  const anomalies: AnomalySignal[] = [];
+  const anomalies: LocalAnomalySignal[] = [];
   for (const [categoryId, rows] of byCategory) {
     if (rows.length < MIN_CATEGORY_SAMPLES) continue;
     const total = rows.reduce((sum, row) => sum + row.amount, 0);
@@ -43,5 +44,14 @@ export function detectAnomalies(
     }
   }
 
-  return anomalies.sort((a, b) => b.multipleOfBaseline - a.multipleOfBaseline).slice(0, 10);
+  return anomalies
+    .sort(
+      (a, b) =>
+        b.multipleOfBaseline - a.multipleOfBaseline ||
+        b.amountMinor - a.amountMinor ||
+        a.categoryId.localeCompare(b.categoryId) ||
+        a.date.localeCompare(b.date) ||
+        a.title.localeCompare(b.title)
+    )
+    .slice(0, 10);
 }

@@ -45,10 +45,13 @@ export function generateBudgetBaseline(args: {
   categories: SnapshotCategory[];
   settingsMonthlyBudget: number | null;
   lookbackMonths?: number;
+  now: Date;
 }): BudgetBaseline {
   const lookbackMonths = Math.min(6, Math.max(1, args.lookbackMonths ?? 3));
   const periods = lookbackPeriods(args.period, lookbackMonths);
-  const overallSpends = periods.map((item) => aggregatePeriodTotals(args.transactions, item).expenseMinor);
+  const overallSpends = periods.map(
+    (item) => aggregatePeriodTotals(args.transactions, item, args.now).expenseMinor
+  );
   const monthsWithOverallSpend = overallSpends.filter((value) => value > 0);
   const overallResolution = resolveOverallBudgetMinor({
     period: args.period,
@@ -56,9 +59,9 @@ export function generateBudgetBaseline(args: {
     settingsMonthlyBudget: args.settingsMonthlyBudget,
   });
 
-  const expenseCategories = args.categories.filter(
-    (category) => category.type === 'expense' || category.type === 'both'
-  );
+  const expenseCategories = [...args.categories]
+    .filter((category) => category.type === 'expense' || category.type === 'both')
+    .sort((a, b) => a.id.localeCompare(b.id));
 
   const categories: BudgetBaselineCategory[] = expenseCategories
     .map((category) => {
@@ -81,7 +84,10 @@ export function generateBudgetBaseline(args: {
       };
     })
     .filter((row) => row.monthsWithSpend > 0)
-    .sort((a, b) => b.averageSpendMinor - a.averageSpendMinor)
+    .sort(
+      (a, b) =>
+        b.averageSpendMinor - a.averageSpendMinor || a.categoryId.localeCompare(b.categoryId)
+    )
     .slice(0, 30);
 
   return {

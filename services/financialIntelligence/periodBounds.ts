@@ -1,4 +1,4 @@
-import type { Period } from './types';
+import type { Period, PeriodStatus } from './types';
 
 export function periodPrefix(period: Period): string {
   return `${period.year}-${String(period.month).padStart(2, '0')}`;
@@ -29,4 +29,31 @@ export function lookbackPeriods(period: Period, count: number): Period[] {
 
 export function inPeriod(date: string, period: Period): boolean {
   return date.startsWith(periodPrefix(period));
+}
+
+/** Local calendar components from `now` — matches YYYY-MM-DD key semantics (no UTC shift). */
+export function localYearMonthDay(now: Date): { year: number; month: number; day: number } {
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+}
+
+export function classifyPeriod(period: Period, now: Date): PeriodStatus {
+  const { year, month } = localYearMonthDay(now);
+  if (period.year > year || (period.year === year && period.month > month)) return 'future';
+  if (period.year === year && period.month === month) return 'active';
+  return 'completed';
+}
+
+/**
+ * Divisor for average daily expense.
+ * - active: elapsed calendar days in month so far (1..dayCount)
+ * - completed: full month length
+ * - future: null (unavailable)
+ */
+export function averageDivisorDays(period: Period, now: Date): number | null {
+  const status = classifyPeriod(period, now);
+  const { dayCount } = periodBounds(period);
+  if (status === 'future') return null;
+  if (status === 'completed') return dayCount;
+  const { day } = localYearMonthDay(now);
+  return Math.min(Math.max(1, day), dayCount);
 }
