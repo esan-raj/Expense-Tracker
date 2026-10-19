@@ -3,7 +3,13 @@ import { FinancialAssistantError } from './errors.ts';
 
 type Bucket = { windowStart: number; count: number };
 
-/** Best-effort per-isolate rate limiter. Not durable across Edge isolates. */
+/**
+ * Best-effort per-isolate rate limiter. Not durable across Edge isolates.
+ * Production deploy of financial-assistant is blocked until durable per-user
+ * rate limiting and provider budget controls are designed (see Phase 3 docs).
+ * Multiple instances can bypass this Map. Future fail-open vs fail-closed
+ * durable limiter behaviour remains an explicit undecided decision.
+ */
 const buckets = new Map<string, Bucket>();
 
 export function resetRateLimitForTests(): void {

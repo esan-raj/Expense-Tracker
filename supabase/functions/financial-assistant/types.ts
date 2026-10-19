@@ -9,7 +9,14 @@ export type AiAssistantErrorCode =
   | 'invalid_model_output'
   | 'stale_snapshot'
   | 'opt_in_required'
+  | 'origin_not_allowed'
   | 'provider_unavailable';
+
+/** Per-request cloud AI consent (server gate). Persistent UI opt-in is a later client phase. */
+export type CloudAiConsent = {
+  cloudAi: true;
+  policyVersion: 1;
+};
 
 export type AmountBucket = 'b0_500' | 'b500_2k' | 'b2k_10k' | 'b10k_plus';
 
@@ -170,6 +177,7 @@ export type SnapshotCapabilityRequest = {
   capability: 'monthly_summary' | 'budget_suggestions';
   locale: string;
   currency: string;
+  consent: CloudAiConsent;
   snapshot: AiSafeSnapshotWire;
 };
 
@@ -179,6 +187,7 @@ export type CategorizeMerchantRequest = {
   capability: 'categorize_merchant';
   locale: string;
   currency: string;
+  consent: CloudAiConsent;
   snapshotId: string;
   snapshotComputedAt: string;
   payload: CategorizeMerchantPayload;
@@ -254,6 +263,13 @@ export type ProviderRequestContext = {
   locale: string;
   currency: string;
   capability: Capability;
+  /**
+   * Cooperative cancellation. Adapters MUST pass `signal` to `fetch`/SDK calls.
+   * JavaScript cannot forcibly terminate arbitrary sync work — honor the signal.
+   */
+  signal: AbortSignal;
+  /** Absolute epoch-ms deadline for this invocation. */
+  deadlineMs: number;
 };
 
 export type MonthlySummaryProviderInput = {

@@ -234,6 +234,8 @@ describe('app startup state machine', () => {
     await controller.start();
     expect(dbRuns).toBe(0);
     expect(state.phase).not.toBe('ready');
+    // Reloading keeps a force-ready fallback timer; dispose clears it for Jest.
+    controller.dispose();
   });
 
   it('ignores stale pipeline results after a newer generation starts', async () => {

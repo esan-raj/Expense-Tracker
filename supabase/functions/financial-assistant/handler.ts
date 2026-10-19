@@ -1,13 +1,13 @@
 import type { AuthDeps } from './auth.ts';
 import { requireUser } from './auth.ts';
 import { MAX_RESPONSE_UTF8_BYTES } from './constants.ts';
-import { buildCorsHeaders, jsonResponse } from './cors.ts';
+import { evaluateRequestOrigin, jsonResponse } from './cors.ts';
 import { FinancialAssistantError, errorResponse, httpStatusFor } from './errors.ts';
 import { utf8ByteLength } from './privacy.ts';
 import type { FinancialAiProvider } from './provider.ts';
 import { resolveProvider } from './provider.ts';
 import { assertWithinRateLimit } from './rateLimit.ts';
-import { withProviderTimeout } from './timeout.ts';
+import { runWithProviderTimeout } from './timeout.ts';
 import type { AiAssistantResponse, ProviderRequestContext } from './types.ts';
 import {
   assertJsonContentType,
@@ -46,10 +46,23 @@ export async function handleFinancialAssistantRequest(
   req: Request,
   deps: HandlerDeps
 ): Promise<Response> {
-  const cors = buildCorsHeaders(req.headers.get('Origin'), deps.getEnv('FINANCIAL_AI_CORS_ORIGINS'));
+  const originGate = evaluateRequestOrigin(
+    req.headers.get('Origin'),
+    deps.getEnv('FINANCIAL_AI_CORS_ORIGINS')
+  );
+  const cors = originGate.headers;
+
+  if (!originGate.allowed) {
+    const body = errorResponse(
+      '00000000-0000-4000-8000-000000000000',
+      'origin_not_allowed',
+      'Origin is not allowed'
+    );
+    return jsonResponse(body, 403, cors, { 'Cache-Control': 'no-store' });
+  }
 
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { status: 204, headers: cors });
+    return new Response(null, { status: 204, headers: cors });
   }
 
   let requestId = '00000000-0000-4000-8000-000000000000';
@@ -93,42 +106,41 @@ export async function handleFinancialAssistantRequest(
     const provider =
       deps.provider ?? resolveProvider(deps.getEnv('FINANCIAL_AI_PROVIDER') ?? 'unavailable');
 
-    const context: ProviderRequestContext = {
-      requestId: request.requestId,
-      userId: user.id,
-      locale: request.locale,
-      currency: request.currency,
-      capability: request.capability,
-    };
+    const result = await runWithProviderTimeout(
+      async ({ signal, deadlineMs }) => {
+        const context: ProviderRequestContext = {
+          requestId: request.requestId,
+          userId: user.id,
+          locale: request.locale,
+          currency: request.currency,
+          capability: request.capability,
+          signal,
+          deadlineMs,
+        };
 
-    let result: unknown;
-    if (request.capability === 'monthly_summary') {
-      result = validateMonthlySummaryResult(
-        await withProviderTimeout(
-          provider.generateMonthlySummary({ snapshot: request.snapshot }, context),
-          deps.providerTimeoutMs
-        ),
-        request.snapshot
-      );
-    } else if (request.capability === 'budget_suggestions') {
-      result = validateBudgetSuggestionResult(
-        await withProviderTimeout(
-          provider.suggestBudgets({ snapshot: request.snapshot }, context),
-          deps.providerTimeoutMs
-        ),
-        request.snapshot
-      );
-    } else if (request.capability === 'categorize_merchant') {
-      result = validateMerchantCategorisationResult(
-        await withProviderTimeout(
-          provider.categorizeMerchant({ payload: request.payload }, context),
-          deps.providerTimeoutMs
-        ),
-        request.payload
-      );
-    } else {
-      throw new FinancialAssistantError('invalid_request', 'capability invalid', 400);
-    }
+        if (request.capability === 'monthly_summary') {
+          return validateMonthlySummaryResult(
+            await provider.generateMonthlySummary({ snapshot: request.snapshot }, context),
+            request.snapshot
+          );
+        }
+        if (request.capability === 'budget_suggestions') {
+          return validateBudgetSuggestionResult(
+            await provider.suggestBudgets({ snapshot: request.snapshot }, context),
+            request.snapshot
+          );
+        }
+        if (request.capability === 'categorize_merchant') {
+          return validateMerchantCategorisationResult(
+            await provider.categorizeMerchant({ payload: request.payload }, context),
+            request.payload
+          );
+        }
+        throw new FinancialAssistantError('invalid_request', 'capability invalid', 400);
+      },
+      deps.providerTimeoutMs,
+      now.getTime()
+    );
 
     const success: AiAssistantResponse = {
       schemaVersion: 1,

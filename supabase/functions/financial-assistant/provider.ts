@@ -11,7 +11,10 @@ import type {
 
 /**
  * Provider-neutral AI backend. Phase 3 ships only the unavailable stub.
- * Do not import vendor SDKs here — add a new class when a provider is chosen.
+ *
+ * Contract: every adapter MUST honor `context.signal` and `context.deadlineMs`
+ * by passing `signal` into `fetch` / SDK abort options. Cancellation is cooperative;
+ * do not assume the runtime can kill arbitrary synchronous work.
  */
 export interface FinancialAiProvider {
   readonly id: string;
@@ -32,14 +35,21 @@ export interface FinancialAiProvider {
   ): Promise<MerchantCategorisationResult>;
 }
 
+function assertSignalOpen(context: ProviderRequestContext): void {
+  if (context.signal.aborted) {
+    throw new FinancialAssistantError('timeout', 'Provider aborted', 504);
+  }
+}
+
 /** Default Phase 3 provider — validates the path without contacting a paid model. */
 export class UnavailableFinancialAiProvider implements FinancialAiProvider {
   readonly id = 'unavailable';
 
   async generateMonthlySummary(
     _input: MonthlySummaryProviderInput,
-    _context: ProviderRequestContext
+    context: ProviderRequestContext
   ): Promise<MonthlySummaryResult> {
+    assertSignalOpen(context);
     throw new FinancialAssistantError(
       'provider_unavailable',
       'No AI provider configured for monthly_summary',
@@ -49,8 +59,9 @@ export class UnavailableFinancialAiProvider implements FinancialAiProvider {
 
   async suggestBudgets(
     _input: BudgetSuggestionProviderInput,
-    _context: ProviderRequestContext
+    context: ProviderRequestContext
   ): Promise<BudgetSuggestionResult> {
+    assertSignalOpen(context);
     throw new FinancialAssistantError(
       'provider_unavailable',
       'No AI provider configured for budget_suggestions',
@@ -60,8 +71,9 @@ export class UnavailableFinancialAiProvider implements FinancialAiProvider {
 
   async categorizeMerchant(
     _input: MerchantCategorisationProviderInput,
-    _context: ProviderRequestContext
+    context: ProviderRequestContext
   ): Promise<MerchantCategorisationResult> {
+    assertSignalOpen(context);
     throw new FinancialAssistantError(
       'provider_unavailable',
       'No AI provider configured for categorize_merchant',
@@ -75,7 +87,6 @@ export function resolveProvider(providerId: string | undefined): FinancialAiProv
   if (id === 'unavailable' || id === '' || id === 'none') {
     return new UnavailableFinancialAiProvider();
   }
-  // Unknown ids fail closed — never invent a silent fallback that calls a vendor.
   throw new FinancialAssistantError(
     'provider_unavailable',
     `Unsupported FINANCIAL_AI_PROVIDER "${id}"`,

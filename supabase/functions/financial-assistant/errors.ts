@@ -24,6 +24,8 @@ export function httpStatusFor(code: AiAssistantErrorCode): number {
   switch (code) {
     case 'auth':
       return 401;
+    case 'origin_not_allowed':
+      return 403;
     case 'rate_limit':
       return 429;
     case 'invalid_request':

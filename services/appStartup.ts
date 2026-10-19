@@ -112,6 +112,14 @@ export function createAppStartupController(deps: {
   // on a later render, so getState() can lag behind the run that just started.
   let activeGeneration = deps.getState().generation;
   let readyGeneration = -1;
+  let forceReadyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearForceReadyTimer = () => {
+    if (forceReadyTimer != null) {
+      clearTimeout(forceReadyTimer);
+      forceReadyTimer = null;
+    }
+  };
 
   const setPhase = (phase: StartupPhase, error: string | null = null) => {
     deps.setState({
@@ -186,7 +194,9 @@ export function createAppStartupController(deps: {
     });
 
     inFlight = (async () => {
-      const forceTimer = setTimeout(() => {
+      clearForceReadyTimer();
+      forceReadyTimer = setTimeout(() => {
+        forceReadyTimer = null;
         markReady(generation);
       }, forceReadyMs);
 
@@ -213,7 +223,7 @@ export function createAppStartupController(deps: {
         // While an OTA reload is pending, keep the force timer as a fallback in case
         // the reload never happens; otherwise make sure this run cannot end unready.
         if (outcome !== 'reloading') {
-          clearTimeout(forceTimer);
+          clearForceReadyTimer();
           markReady(generation);
         }
       }
@@ -228,6 +238,10 @@ export function createAppStartupController(deps: {
   return {
     isRunning(): boolean {
       return inFlight !== null;
+    },
+    /** Clears any pending force-ready timer (tests / teardown). Safe if none. */
+    dispose(): void {
+      clearForceReadyTimer();
     },
     start,
     retry(): Promise<StartupState> {

@@ -1,9 +1,15 @@
-import { CAPABILITIES, FUTURE_TIMESTAMP_SKEW_MS, MAX_REQUEST_UTF8_BYTES } from './constants.ts';
+import {
+  CAPABILITIES,
+  CLOUD_AI_CONSENT_POLICY_VERSION,
+  FUTURE_TIMESTAMP_SKEW_MS,
+  MAX_REQUEST_UTF8_BYTES,
+} from './constants.ts';
 import { FinancialAssistantError } from './errors.ts';
 import { collectProhibitedPaths, looksUnredacted, utf8ByteLength } from './privacy.ts';
-import { assertObject, assertOptionalExactKeys, assertString } from './schema.ts';
+import { assertExactKeys, assertObject, assertOptionalExactKeys, assertString } from './schema.ts';
 import type {
   CategorizeMerchantPayload,
+  CloudAiConsent,
   FinancialAssistantRequest,
   PaymentMethod,
 } from './types.ts';
@@ -47,6 +53,25 @@ function assertIsoNotFuture(value: unknown, label: string, nowMs: number): strin
     throw new FinancialAssistantError('invalid_request', `${label} must not be in the future`, 400);
   }
   return text;
+}
+
+function validateConsent(raw: unknown): CloudAiConsent {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new FinancialAssistantError('opt_in_required', 'consent is required', 400);
+  }
+  const consent = raw as Record<string, unknown>;
+  assertExactKeys(consent, ['cloudAi', 'policyVersion'], 'consent');
+  if (consent.cloudAi !== true) {
+    throw new FinancialAssistantError('opt_in_required', 'consent.cloudAi must be true', 400);
+  }
+  if (consent.policyVersion !== CLOUD_AI_CONSENT_POLICY_VERSION) {
+    throw new FinancialAssistantError(
+      'opt_in_required',
+      `consent.policyVersion must be ${CLOUD_AI_CONSENT_POLICY_VERSION}`,
+      400
+    );
+  }
+  return { cloudAi: true, policyVersion: 1 };
 }
 
 function validateCategorizePayload(raw: unknown): CategorizeMerchantPayload {
@@ -159,10 +184,14 @@ export function parseAndValidateRequest(rawBody: string, nowMs: number): Financi
   const locale = assertString(body.locale, 'locale', 32);
   const currency = assertCurrency(body.currency, 'currency');
 
+  if (!Object.prototype.hasOwnProperty.call(body, 'consent')) {
+    throw new FinancialAssistantError('opt_in_required', 'consent is required', 400);
+  }
+
   if (capability === 'monthly_summary' || capability === 'budget_suggestions') {
     assertOptionalExactKeys(
       body,
-      ['schemaVersion', 'requestId', 'capability', 'locale', 'currency', 'snapshot'],
+      ['schemaVersion', 'requestId', 'capability', 'locale', 'currency', 'consent', 'snapshot'],
       [],
       'body'
     );
@@ -173,6 +202,7 @@ export function parseAndValidateRequest(rawBody: string, nowMs: number): Financi
         400
       );
     }
+    const consent = validateConsent(body.consent);
     const snapshot = validateAiSafeSnapshot(body.snapshot, nowMs);
     if (snapshot.currency !== currency) {
       throw new FinancialAssistantError('invalid_request', 'currency must match snapshot.currency', 400);
@@ -183,6 +213,7 @@ export function parseAndValidateRequest(rawBody: string, nowMs: number): Financi
       capability,
       locale,
       currency,
+      consent,
       snapshot,
     };
   }
@@ -195,6 +226,7 @@ export function parseAndValidateRequest(rawBody: string, nowMs: number): Financi
       'capability',
       'locale',
       'currency',
+      'consent',
       'snapshotId',
       'snapshotComputedAt',
       'payload',
@@ -211,12 +243,15 @@ export function parseAndValidateRequest(rawBody: string, nowMs: number): Financi
     );
   }
 
+  const consent = validateConsent(body.consent);
+
   return {
     schemaVersion: 1,
     requestId,
     capability: 'categorize_merchant',
     locale,
     currency,
+    consent,
     snapshotId: assertUuid(body.snapshotId, 'snapshotId'),
     snapshotComputedAt: assertIsoNotFuture(body.snapshotComputedAt, 'snapshotComputedAt', nowMs),
     payload: validateCategorizePayload(body.payload),

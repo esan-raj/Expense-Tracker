@@ -232,6 +232,21 @@ export function validateBudgetSuggestionResult(
     };
   });
 
+  const seenBudgetIds = new Set<string>();
+  for (const row of categories) {
+    if (seenBudgetIds.has(row.categoryId)) {
+      throw new FinancialAssistantError(
+        'invalid_model_output',
+        `duplicate categoryId ${row.categoryId}`,
+        502
+      );
+    }
+    seenBudgetIds.add(row.categoryId);
+  }
+  categories.sort(
+    (a, b) => b.confidence - a.confidence || a.categoryId.localeCompare(b.categoryId)
+  );
+
   let overall: BudgetSuggestionResult['overall'];
   if (obj.overall != null) {
     if (typeof obj.overall !== 'object' || Array.isArray(obj.overall)) {
@@ -291,7 +306,21 @@ export function validateMerchantCategorisationResult(
     };
   });
 
-  suggestions.sort((a, b) => b.confidence - a.confidence);
+  const seen = new Set<string>();
+  for (const row of suggestions) {
+    if (seen.has(row.categoryId)) {
+      throw new FinancialAssistantError(
+        'invalid_model_output',
+        `duplicate categoryId ${row.categoryId}`,
+        502
+      );
+    }
+    seen.add(row.categoryId);
+  }
+
+  suggestions.sort(
+    (a, b) => b.confidence - a.confidence || a.categoryId.localeCompare(b.categoryId)
+  );
   return { suggestions };
 }
 

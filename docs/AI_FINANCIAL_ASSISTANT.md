@@ -527,7 +527,9 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 | Wire for summary/budgets | **Only** `AiSafeFinancialSnapshot` (`kind: 'ai_safe'`) — `LocalFinancialSnapshot` rejected |
 | Wire for categorize | Separate redacted merchant payload; server re-checks D4-like patterns |
 | Provider | `FinancialAiProvider` + default `UnavailableFinancialAiProvider` (`FINANCIAL_AI_PROVIDER=unavailable`) — no paid vendor SDK |
-| Limits | 8 KiB request / 16 KiB response UTF-8; best-effort in-memory rate limit |
+| Limits | 8 KiB request / 16 KiB response UTF-8; best-effort in-memory rate limit (non-durable; deploy blocked until durable limiter designed) |
+| Consent | Per-request `consent: { cloudAi: true, policyVersion: 1 }` required before provider call; persistent settings opt-in UI remains later |
+| Cancellation | Cooperative `AbortSignal` + deadline on provider context; adapters must honor signal |
 
 Still **proposed**: deploy, chosen AI provider adapter, client invoke module, AI settings/opt-in UI, response UI, merchant redaction helper on device. Do not send `LocalFinancialSnapshot` on the wire.
 

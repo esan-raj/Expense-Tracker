@@ -24,3 +24,6 @@ export const CAPABILITIES = [
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
+
+/** Supported per-request cloud AI consent policy version. */
+export const CLOUD_AI_CONSENT_POLICY_VERSION = 1 as const;
