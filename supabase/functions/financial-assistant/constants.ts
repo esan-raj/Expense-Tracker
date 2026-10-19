@@ -7,6 +7,12 @@ export const MAX_RESPONSE_UTF8_BYTES = 16 * 1024;
 /** Snapshot older than this is marked stale (still processed). */
 export const STALE_SNAPSHOT_MS = 24 * 60 * 60 * 1000;
 
+/** Reject snapshotComputedAt more than this far ahead of server now. */
+export const FUTURE_TIMESTAMP_SKEW_MS = 60 * 1000;
+
+/** Hard timeout around provider calls (fail closed). */
+export const PROVIDER_TIMEOUT_MS = 12_000;
+
 /** Best-effort in-memory rate limit (non-durable across isolates). */
 export const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 export const RATE_LIMIT_MAX_REQUESTS = 20;

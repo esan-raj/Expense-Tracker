@@ -20,9 +20,18 @@ Not in scope: UI, deploy, paid provider SDK, migrations, OTA, APK, SMS/notificat
 | D10 | Env: `FINANCIAL_AI_PROVIDER=unavailable` (default); provider secrets never `EXPO_PUBLIC_*` | Spec D1.5 / RELEASE.md | Client-held provider keys |
 | D11 | No response persistence / minimal log fields (`requestId`, capability, error code, user id hash optional) | Spec K2 retention unresolved — fail closed to minimal | Logging full AI payloads |
 | D12 | No client invoke module / UI wiring in Phase 3 | Explicit Phase 3 scope | Early Expo service that encourages accidental Local snapshot upload |
+| D13 | Strict allowlisted AiSafe snapshot parse (no untrusted object spread) | Corrective: unknown fields / unsafe integers must not reach providers | Partial validation + `...(snap as …)` |
+| D14 | Model output: reject invalid confidence, oversized text, bad kinds/IDs (no clamp/truncate) | Fail closed — clamping creates a false “valid” response | Soft repair of provider JSON |
+| D15 | Budget results require `requiresConfirmation: true` | Recommendations must never look auto-applicable | Omitting confirmation semantics |
+| D16 | Invented categorize IDs → `invalid_model_output` (no silent drop) | Silent filter hid model invention | Drop-and-continue |
+| D17 | Hard provider timeout (`PROVIDER_TIMEOUT_MS`) | Cost / hang control | Unbounded await |
+| D18 | CORS allowlist via `FINANCIAL_AI_CORS_ORIGINS` — never `*` | Browser origin reflection only; not a substitute for JWT auth | `Access-Control-Allow-Origin: *` |
+| D19 | `405` unsupported method; `415` non-JSON content type; reject future timestamps | Corrective request hygiene | `400` for all / accepting future clocks |
+| D20 | Tests use synthetic three-segment bearer, not JWT-shaped fixtures | Avoid secret-scanner false positives | `eyJ…` fixture strings |
 
 ## Threat notes
 
 - Credentials: only Edge secrets / platform `SUPABASE_*`; never shipped in Expo public env.
-- Privacy: reject `kind: 'local'`, prohibited keys, oversized bodies (>8 KiB req / >16 KiB res).
+- Privacy: reject `kind: 'local'`, prohibited keys, unknown snapshot fields, oversized bodies (>8 KiB req / >16 KiB res).
 - Portability: all model I/O goes through `FinancialAiProvider`; swapping providers is a new implementation class only.
+- CORS allowlisting is not authentication; JWT remains mandatory.

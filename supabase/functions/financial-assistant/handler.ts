@@ -1,14 +1,19 @@
 import type { AuthDeps } from './auth.ts';
 import { requireUser } from './auth.ts';
 import { MAX_RESPONSE_UTF8_BYTES } from './constants.ts';
-import { CORS_HEADERS, jsonResponse } from './cors.ts';
+import { buildCorsHeaders, jsonResponse } from './cors.ts';
 import { FinancialAssistantError, errorResponse, httpStatusFor } from './errors.ts';
 import { utf8ByteLength } from './privacy.ts';
 import type { FinancialAiProvider } from './provider.ts';
 import { resolveProvider } from './provider.ts';
 import { assertWithinRateLimit } from './rateLimit.ts';
+import { withProviderTimeout } from './timeout.ts';
 import type { AiAssistantResponse, ProviderRequestContext } from './types.ts';
-import { isSnapshotStale, parseAndValidateRequest } from './validateRequest.ts';
+import {
+  assertJsonContentType,
+  isSnapshotStale,
+  parseAndValidateRequest,
+} from './validateRequest.ts';
 import {
   assertResponseSize,
   validateBudgetSuggestionResult,
@@ -20,6 +25,7 @@ export type HandlerDeps = AuthDeps & {
   getEnv: (key: string) => string | undefined;
   now?: () => Date;
   provider?: FinancialAiProvider;
+  providerTimeoutMs?: number;
 };
 
 function snapshotIdOf(request: ReturnType<typeof parseAndValidateRequest>): string {
@@ -40,28 +46,31 @@ export async function handleFinancialAssistantRequest(
   req: Request,
   deps: HandlerDeps
 ): Promise<Response> {
+  const cors = buildCorsHeaders(req.headers.get('Origin'), deps.getEnv('FINANCIAL_AI_CORS_ORIGINS'));
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { status: 204, headers: CORS_HEADERS });
+    return new Response('ok', { status: 204, headers: cors });
   }
 
   let requestId = '00000000-0000-4000-8000-000000000000';
 
   try {
     if (req.method !== 'POST') {
-      throw new FinancialAssistantError('invalid_request', 'Only POST is supported', 400);
+      throw new FinancialAssistantError('invalid_request', 'Only POST is supported', 405);
     }
 
+    assertJsonContentType(req.headers.get('Content-Type'));
+
     const user = await requireUser(req.headers.get('Authorization'), deps);
-    assertWithinRateLimit(user.id, (deps.now?.() ?? new Date()).getTime());
+    const now = deps.now?.() ?? new Date();
+    assertWithinRateLimit(user.id, now.getTime());
 
     const rawBody = await req.text();
-    const request = parseAndValidateRequest(rawBody);
+    const request = parseAndValidateRequest(rawBody, now.getTime());
     requestId = request.requestId;
 
-    const now = deps.now?.() ?? new Date();
     const stale = isSnapshotStale(computedAtOf(request), now.getTime());
 
-    // Insufficient-data short-circuit before provider (spec F4).
     if (request.capability === 'monthly_summary' && request.snapshot.flags.hasExpenses !== true) {
       throw new FinancialAssistantError(
         'invalid_request',
@@ -70,11 +79,8 @@ export async function handleFinancialAssistantRequest(
       );
     }
     if (request.capability === 'budget_suggestions') {
-      const baseline = request.snapshot.budgetBaseline as
-        | { lookbackMonths?: number; overall?: { averageSpendMinor?: number } }
-        | undefined;
-      const lookback = typeof baseline?.lookbackMonths === 'number' ? baseline.lookbackMonths : 0;
-      const avg = baseline?.overall?.averageSpendMinor ?? 0;
+      const lookback = request.snapshot.budgetBaseline.lookbackMonths;
+      const avg = request.snapshot.budgetBaseline.overall.averageSpendMinor;
       if (lookback < 1 || avg <= 0) {
         throw new FinancialAssistantError(
           'invalid_request',
@@ -98,15 +104,26 @@ export async function handleFinancialAssistantRequest(
     let result: unknown;
     if (request.capability === 'monthly_summary') {
       result = validateMonthlySummaryResult(
-        await provider.generateMonthlySummary({ snapshot: request.snapshot }, context)
+        await withProviderTimeout(
+          provider.generateMonthlySummary({ snapshot: request.snapshot }, context),
+          deps.providerTimeoutMs
+        ),
+        request.snapshot
       );
     } else if (request.capability === 'budget_suggestions') {
       result = validateBudgetSuggestionResult(
-        await provider.suggestBudgets({ snapshot: request.snapshot }, context)
+        await withProviderTimeout(
+          provider.suggestBudgets({ snapshot: request.snapshot }, context),
+          deps.providerTimeoutMs
+        ),
+        request.snapshot
       );
     } else if (request.capability === 'categorize_merchant') {
       result = validateMerchantCategorisationResult(
-        await provider.categorizeMerchant({ payload: request.payload }, context),
+        await withProviderTimeout(
+          provider.categorizeMerchant({ payload: request.payload }, context),
+          deps.providerTimeoutMs
+        ),
         request.payload
       );
     } else {
@@ -125,7 +142,7 @@ export async function handleFinancialAssistantRequest(
 
     const encoded = JSON.stringify(success);
     assertResponseSize(encoded);
-    return jsonResponse(success, 200, {
+    return jsonResponse(success, 200, cors, {
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',
     });
@@ -136,17 +153,20 @@ export async function handleFinancialAssistantRequest(
       if (utf8ByteLength(encoded) > MAX_RESPONSE_UTF8_BYTES) {
         return jsonResponse(
           errorResponse(requestId, error.code, 'Error response truncated'),
-          httpStatusFor(error.code)
+          httpStatusFor(error.code),
+          cors
         );
       }
-      return jsonResponse(body, error.httpStatus || httpStatusFor(error.code), {
+      return jsonResponse(body, error.httpStatus || httpStatusFor(error.code), cors, {
         'Cache-Control': 'no-store',
       });
     }
 
-    // Do not leak internal exception text (may contain env/provider details).
-    return jsonResponse(errorResponse(requestId, 'provider_unavailable', 'Unexpected assistant failure'), 500, {
-      'Cache-Control': 'no-store',
-    });
+    return jsonResponse(
+      errorResponse(requestId, 'provider_unavailable', 'Unexpected assistant failure'),
+      500,
+      cors,
+      { 'Cache-Control': 'no-store' }
+    );
   }
 }

@@ -35,7 +35,6 @@ export function httpStatusFor(code: AiAssistantErrorCode): number {
     case 'timeout':
       return 504;
     case 'provider_unavailable':
-      return 503;
     case 'offline':
       return 503;
     default:

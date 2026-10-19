@@ -1,17 +1,31 @@
 /// <reference types="jest" />
 import { extractBearerToken } from '../supabase/functions/financial-assistant/auth';
+import { buildCorsHeaders } from '../supabase/functions/financial-assistant/cors';
 import { handleFinancialAssistantRequest } from '../supabase/functions/financial-assistant/handler';
 import { collectProhibitedPaths, looksUnredacted, utf8ByteLength } from '../supabase/functions/financial-assistant/privacy';
 import { UnavailableFinancialAiProvider } from '../supabase/functions/financial-assistant/provider';
 import { resetRateLimitForTests } from '../supabase/functions/financial-assistant/rateLimit';
 import { MAX_REQUEST_UTF8_BYTES } from '../supabase/functions/financial-assistant/constants';
+import { withProviderTimeout } from '../supabase/functions/financial-assistant/timeout';
 import { parseAndValidateRequest } from '../supabase/functions/financial-assistant/validateRequest';
+import {
+  validateBudgetSuggestionResult,
+  validateMerchantCategorisationResult,
+  validateMonthlySummaryResult,
+} from '../supabase/functions/financial-assistant/validateResponse';
 import type { FinancialAiProvider } from '../supabase/functions/financial-assistant/provider';
+import type { AiSafeSnapshotWire } from '../supabase/functions/financial-assistant/types';
 
-const USER_JWT = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.sig';
+/**
+ * Synthetic three-segment bearer for auth shape tests only.
+ * Intentionally not a real JWT / not base64url — avoids secret-scanner false positives.
+ */
+const SYNTHETIC_BEARER = 'test-header.test-payload.test-signature';
 
-function aiSafeSnapshot(overrides: Record<string, unknown> = {}) {
-  return {
+const NOW_MS = Date.parse('2026-10-19T12:00:00.000Z');
+
+function aiSafeSnapshot(overrides: Record<string, unknown> = {}): AiSafeSnapshotWire {
+  const base: AiSafeSnapshotWire = {
     schemaVersion: 1,
     kind: 'ai_safe',
     snapshotId: 'snap_abcd1234_0',
@@ -56,7 +70,17 @@ function aiSafeSnapshot(overrides: Record<string, unknown> = {}) {
         medianSpendMinor: 4_400_000,
         source: 'budget_row',
       },
-      categories: [],
+      categories: [
+        {
+          categoryId: 'food',
+          categoryName: 'Food',
+          averageSpendMinor: 900_000,
+          medianSpendMinor: 850_000,
+          currentBudgetMinor: 1_000_000,
+          volatility: 'medium',
+          monthsWithSpend: 3,
+        },
+      ],
     },
     flags: {
       hasIncome: true,
@@ -82,8 +106,8 @@ function aiSafeSnapshot(overrides: Record<string, unknown> = {}) {
       exceededLimit: false,
       reason: null,
     },
-    ...overrides,
   };
+  return { ...base, ...overrides } as AiSafeSnapshotWire;
 }
 
 function summaryBody(overrides: Record<string, unknown> = {}) {
@@ -105,26 +129,43 @@ async function invoke(
     provider?: FinancialAiProvider;
     userId?: string | null;
     env?: Record<string, string>;
+    method?: string;
+    contentType?: string | null;
+    origin?: string;
+    providerTimeoutMs?: number;
   } = {}
 ) {
   const raw = typeof body === 'string' ? body : JSON.stringify(body);
+  const headers: Record<string, string> = {};
+  if (options.contentType !== null) {
+    headers['Content-Type'] = options.contentType ?? 'application/json';
+  }
+  if (options.auth !== null) {
+    headers.Authorization = options.auth ?? `Bearer ${SYNTHETIC_BEARER}`;
+  }
+  if (options.origin) {
+    headers.Origin = options.origin;
+  }
+
   const req = new Request('http://localhost/functions/v1/financial-assistant', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.auth === null
-        ? {}
-        : { Authorization: options.auth ?? `Bearer ${USER_JWT}` }),
-    },
-    body: raw,
+    method: options.method ?? 'POST',
+    headers,
+    body: options.method === 'GET' || options.method === 'OPTIONS' ? undefined : raw,
   });
 
   return handleFinancialAssistantRequest(req, {
-    getEnv: (key) => options.env?.[key] ?? (key === 'FINANCIAL_AI_PROVIDER' ? 'unavailable' : undefined),
+    getEnv: (key) =>
+      options.env?.[key] ??
+      (key === 'FINANCIAL_AI_PROVIDER'
+        ? 'unavailable'
+        : key === 'FINANCIAL_AI_CORS_ORIGINS'
+          ? 'https://app.spendwise.example'
+          : undefined),
     getUserFromJwt: async () =>
       options.userId === null ? null : { id: options.userId ?? 'user-1' },
     provider: options.provider,
-    now: () => new Date('2026-10-19T12:00:00.000Z'),
+    now: () => new Date(NOW_MS),
+    providerTimeoutMs: options.providerTimeoutMs,
   });
 }
 
@@ -149,7 +190,7 @@ describe('privacy guards', () => {
 
 describe('parseAndValidateRequest', () => {
   it('accepts AiSafeFinancialSnapshot for monthly_summary', () => {
-    const parsed = parseAndValidateRequest(JSON.stringify(summaryBody()));
+    const parsed = parseAndValidateRequest(JSON.stringify(summaryBody()), NOW_MS);
     expect(parsed.capability).toBe('monthly_summary');
     if (parsed.capability === 'monthly_summary') {
       expect(parsed.snapshot.kind).toBe('ai_safe');
@@ -159,28 +200,81 @@ describe('parseAndValidateRequest', () => {
   it('rejects LocalFinancialSnapshot', () => {
     expect(() =>
       parseAndValidateRequest(
-        JSON.stringify(
-          summaryBody({
-            snapshot: aiSafeSnapshot({ kind: 'local' }),
-          })
-        )
+        JSON.stringify(summaryBody({ snapshot: aiSafeSnapshot({ kind: 'local' }) })),
+        NOW_MS
       )
-    ).toThrow(/LocalFinancialSnapshot|ai_safe/);
+    ).toThrow(/LocalFinancialSnapshot|ai_safe|unknown fields/);
   });
 
   it('rejects prohibited raw fields and oversized bodies', () => {
     expect(() =>
       parseAndValidateRequest(
-        JSON.stringify(
-          summaryBody({
-            snapshot: aiSafeSnapshot({ title: 'CITY CAFE' }),
-          })
-        )
+        JSON.stringify(summaryBody({ snapshot: { ...aiSafeSnapshot(), title: 'CITY CAFE' } })),
+        NOW_MS
       )
-    ).toThrow(/Prohibited/);
+    ).toThrow(/Prohibited|unknown fields/);
 
     const huge = 'x'.repeat(MAX_REQUEST_UTF8_BYTES + 10);
-    expect(() => parseAndValidateRequest(huge)).toThrow(/UTF-8/);
+    expect(() => parseAndValidateRequest(huge, NOW_MS)).toThrow(/UTF-8/);
+  });
+
+  it('rejects arbitrary unknown snapshot fields', () => {
+    expect(() =>
+      parseAndValidateRequest(
+        JSON.stringify(
+          summaryBody({
+            snapshot: { ...aiSafeSnapshot(), extraLeak: 'secret-account' },
+          })
+        ),
+        NOW_MS
+      )
+    ).toThrow(/unknown fields/);
+  });
+
+  it('rejects malformed totals and unsafe integers', () => {
+    expect(() =>
+      parseAndValidateRequest(
+        JSON.stringify(
+          summaryBody({
+            snapshot: aiSafeSnapshot({
+              totals: {
+                ...aiSafeSnapshot().totals,
+                expenseMinor: Number.MAX_SAFE_INTEGER + 1,
+              },
+            }),
+          })
+        ),
+        NOW_MS
+      )
+    ).toThrow(/safe integer/);
+
+    expect(() =>
+      parseAndValidateRequest(
+        JSON.stringify(
+          summaryBody({
+            snapshot: aiSafeSnapshot({
+              topCategories: 'not-an-array',
+            }),
+          })
+        ),
+        NOW_MS
+      )
+    ).toThrow(/array/);
+  });
+
+  it('rejects future snapshot timestamps', () => {
+    expect(() =>
+      parseAndValidateRequest(
+        JSON.stringify(
+          summaryBody({
+            snapshot: aiSafeSnapshot({
+              snapshotComputedAt: '2099-01-01T00:00:00.000Z',
+            }),
+          })
+        ),
+        NOW_MS
+      )
+    ).toThrow(/future/);
   });
 
   it('validates categorize_merchant minimal redacted contract', () => {
@@ -202,7 +296,8 @@ describe('parseAndValidateRequest', () => {
             { categoryId: 'misc', categoryName: 'Miscellaneous' },
           ],
         },
-      })
+      }),
+      NOW_MS
     );
     expect(parsed.capability).toBe('categorize_merchant');
   });
@@ -223,14 +318,111 @@ describe('parseAndValidateRequest', () => {
             amountBucket: 'b500_2k',
             candidates: [{ categoryId: 'food', categoryName: 'Food' }],
           },
-        })
+        }),
+        NOW_MS
       )
     ).toThrow(/redaction/);
   });
 });
 
+describe('model output validation (fail closed)', () => {
+  const snapshot = aiSafeSnapshot();
+
+  it('rejects invalid confidence instead of clamping', () => {
+    expect(() =>
+      validateMonthlySummaryResult(
+        {
+          headline: 'ok',
+          bullets: ['a'],
+          interpretations: [],
+          suggestedActions: [],
+          confidence: 1.5,
+        },
+        snapshot
+      )
+    ).toThrow(/confidence/);
+  });
+
+  it('rejects oversized model text instead of truncating', () => {
+    expect(() =>
+      validateMonthlySummaryResult(
+        {
+          headline: 'x'.repeat(121),
+          bullets: ['a'],
+          interpretations: [],
+          suggestedActions: [],
+          confidence: 0.5,
+        },
+        snapshot
+      )
+    ).toThrow(/exceeds/);
+  });
+
+  it('rejects invalid action kinds and unknown category IDs', () => {
+    expect(() =>
+      validateMonthlySummaryResult(
+        {
+          headline: 'ok',
+          bullets: ['a'],
+          interpretations: [],
+          suggestedActions: [
+            { id: 'x', label: 'Go', kind: 'delete_ledger', categoryId: 'food' },
+          ],
+          confidence: 0.5,
+        },
+        snapshot
+      )
+    ).toThrow(/kind/);
+
+    expect(() =>
+      validateMonthlySummaryResult(
+        {
+          headline: 'ok',
+          bullets: ['a'],
+          interpretations: [],
+          suggestedActions: [
+            { id: 'x', label: 'Go', kind: 'review_category', categoryId: 'invented' },
+          ],
+          confidence: 0.5,
+        },
+        snapshot
+      )
+    ).toThrow(/categoryId/);
+  });
+
+  it('requires explicit confirmation flag on budget recommendations', () => {
+    expect(() =>
+      validateBudgetSuggestionResult(
+        {
+          categories: [],
+          caveats: [],
+        },
+        snapshot
+      )
+    ).toThrow(/requiresConfirmation/);
+  });
+
+  it('rejects invented merchant categories instead of silently dropping them', () => {
+    expect(() =>
+      validateMerchantCategorisationResult(
+        {
+          suggestions: [
+            { categoryId: 'food', confidence: 0.9, reason: 'Cafe pattern' },
+            { categoryId: 'injected', confidence: 0.99, reason: 'Should fail closed' },
+          ],
+        },
+        {
+          merchantLabelRedacted: 'CITY CAFE',
+          amountBucket: 'b500_2k',
+          candidates: [{ categoryId: 'food', categoryName: 'Food' }],
+        }
+      )
+    ).toThrow(/not in candidates/);
+  });
+});
+
 describe('handleFinancialAssistantRequest', () => {
-  it('requires a user JWT', async () => {
+  it('requires a user bearer token', async () => {
     const res = await invoke(summaryBody(), { auth: null });
     expect(res.status).toBe(401);
     const json = await res.json();
@@ -296,7 +488,7 @@ describe('handleFinancialAssistantRequest', () => {
     expect(utf8ByteLength(JSON.stringify(json))).toBeLessThanOrEqual(16 * 1024);
   });
 
-  it('filters categorize suggestions to candidates only', async () => {
+  it('rejects categorize responses that invent categories', async () => {
     const provider: FinancialAiProvider = {
       id: 'mock',
       generateMonthlySummary: jest.fn(),
@@ -305,7 +497,7 @@ describe('handleFinancialAssistantRequest', () => {
         return {
           suggestions: [
             { categoryId: 'food', confidence: 0.9, reason: 'Cafe pattern' },
-            { categoryId: 'injected', confidence: 0.99, reason: 'Should drop' },
+            { categoryId: 'injected', confidence: 0.99, reason: 'Should fail' },
           ],
         };
       },
@@ -327,11 +519,49 @@ describe('handleFinancialAssistantRequest', () => {
       },
       { provider }
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(502);
     const json = await res.json();
-    expect(json.result.suggestions).toEqual([
-      expect.objectContaining({ categoryId: 'food' }),
-    ]);
+    expect(json.error.code).toBe('invalid_model_output');
+  });
+
+  it('enforces provider timeout', async () => {
+    const provider: FinancialAiProvider = {
+      id: 'slow',
+      async generateMonthlySummary() {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+          headline: 'late',
+          bullets: ['x'],
+          interpretations: [],
+          suggestedActions: [],
+          confidence: 0.5,
+        };
+      },
+      suggestBudgets: jest.fn(),
+      categorizeMerchant: jest.fn(),
+    };
+    const res = await invoke(summaryBody(), { provider, providerTimeoutMs: 5 });
+    expect(res.status).toBe(504);
+    const json = await res.json();
+    expect(json.error.code).toBe('timeout');
+  });
+
+  it('does not permit wildcard CORS', () => {
+    const headers = buildCorsHeaders('https://evil.example', 'https://app.spendwise.example');
+    expect(headers['Access-Control-Allow-Origin']).toBeUndefined();
+    const allowed = buildCorsHeaders('https://app.spendwise.example', 'https://app.spendwise.example');
+    expect(allowed['Access-Control-Allow-Origin']).toBe('https://app.spendwise.example');
+    expect(JSON.stringify(buildCorsHeaders(null, '*'))).not.toContain('"*"');
+  });
+
+  it('returns 405 for unsupported methods', async () => {
+    const res = await invoke(summaryBody(), { method: 'GET' });
+    expect(res.status).toBe(405);
+  });
+
+  it('rejects invalid content type', async () => {
+    const res = await invoke(summaryBody(), { contentType: 'text/plain' });
+    expect(res.status).toBe(415);
   });
 
   it('rate limits repeated calls for the same user', async () => {
@@ -343,5 +573,11 @@ describe('handleFinancialAssistantRequest', () => {
     expect(limited.status).toBe(429);
     const json = await limited.json();
     expect(json.error.code).toBe('rate_limit');
+  });
+});
+
+describe('withProviderTimeout', () => {
+  it('resolves when the provider finishes in time', async () => {
+    await expect(withProviderTimeout(Promise.resolve(1), 100)).resolves.toBe(1);
   });
 });

@@ -1,12 +1,13 @@
-import { CAPABILITIES, MAX_REQUEST_UTF8_BYTES } from './constants.ts';
+import { CAPABILITIES, FUTURE_TIMESTAMP_SKEW_MS, MAX_REQUEST_UTF8_BYTES } from './constants.ts';
 import { FinancialAssistantError } from './errors.ts';
 import { collectProhibitedPaths, looksUnredacted, utf8ByteLength } from './privacy.ts';
+import { assertObject, assertOptionalExactKeys, assertString } from './schema.ts';
 import type {
-  AiSafeSnapshotWire,
   CategorizeMerchantPayload,
   FinancialAssistantRequest,
   PaymentMethod,
 } from './types.ts';
+import { validateAiSafeSnapshot } from './validateSnapshot.ts';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -22,41 +23,6 @@ const PAYMENT_METHODS = new Set<PaymentMethod>([
   'other',
 ]);
 
-function assertObject(value: unknown, label: string): Record<string, unknown> {
-  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new FinancialAssistantError('invalid_request', `${label} must be an object`, 400);
-  }
-  return value as Record<string, unknown>;
-}
-
-function assertString(value: unknown, label: string, maxLen?: number): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new FinancialAssistantError('invalid_request', `${label} must be a non-empty string`, 400);
-  }
-  if (maxLen != null && value.length > maxLen) {
-    throw new FinancialAssistantError('invalid_request', `${label} exceeds ${maxLen} characters`, 400);
-  }
-  return value;
-}
-
-function assertUuid(value: unknown, label: string): string {
-  const text = assertString(value, label, 80);
-  // Allow RFC UUID or Phase 2 snapshot ids (`snap_<rev>_<n>`).
-  if (UUID_RE.test(text) || /^snap_[0-9a-f]+_\d+$/i.test(text)) {
-    return text;
-  }
-  throw new FinancialAssistantError('invalid_request', `${label} must be a uuid or snap_* id`, 400);
-}
-
-function assertIsoDate(value: unknown, label: string): string {
-  const text = assertString(value, label, 64);
-  const ms = Date.parse(text);
-  if (Number.isNaN(ms)) {
-    throw new FinancialAssistantError('invalid_request', `${label} must be ISO-8601`, 400);
-  }
-  return text;
-}
-
 function assertCurrency(value: unknown, label: string): string {
   const text = assertString(value, label, 3);
   if (!CURRENCY_RE.test(text)) {
@@ -65,74 +31,33 @@ function assertCurrency(value: unknown, label: string): string {
   return text;
 }
 
-function validateAiSafeSnapshot(raw: unknown): AiSafeSnapshotWire {
-  const snap = assertObject(raw, 'snapshot');
+function assertUuid(value: unknown, label: string): string {
+  const text = assertString(value, label, 80);
+  if (UUID_RE.test(text) || /^snap_[0-9a-f]+_\d+$/i.test(text)) return text;
+  throw new FinancialAssistantError('invalid_request', `${label} must be a uuid or snap_* id`, 400);
+}
 
-  if (snap.kind === 'local') {
-    throw new FinancialAssistantError(
-      'invalid_request',
-      'LocalFinancialSnapshot is not permitted on the wire',
-      400
-    );
+function assertIsoNotFuture(value: unknown, label: string, nowMs: number): string {
+  const text = assertString(value, label, 64);
+  const ms = Date.parse(text);
+  if (Number.isNaN(ms)) {
+    throw new FinancialAssistantError('invalid_request', `${label} must be ISO-8601`, 400);
   }
-  if (snap.kind !== 'ai_safe') {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.kind must be ai_safe', 400);
+  if (ms > nowMs + FUTURE_TIMESTAMP_SKEW_MS) {
+    throw new FinancialAssistantError('invalid_request', `${label} must not be in the future`, 400);
   }
-  if (snap.schemaVersion !== 1) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.schemaVersion must be 1', 400);
-  }
-
-  const period = assertObject(snap.period, 'snapshot.period');
-  const month = period.month;
-  const year = period.year;
-  if (typeof month !== 'number' || !Number.isInteger(month) || month < 1 || month > 12) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.period.month invalid', 400);
-  }
-  if (typeof year !== 'number' || !Number.isInteger(year) || year < 1970 || year > 2100) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.period.year invalid', 400);
-  }
-
-  const flags = assertObject(snap.flags, 'snapshot.flags');
-  if (flags.transferExcluded !== true) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.flags.transferExcluded must be true', 400);
-  }
-
-  const currency = assertCurrency(snap.currency, 'snapshot.currency');
-  const snapshotId = assertUuid(snap.snapshotId, 'snapshot.snapshotId');
-  const snapshotComputedAt = assertIsoDate(snap.snapshotComputedAt, 'snapshot.snapshotComputedAt');
-
-  if (typeof snap.financeRevision !== 'number' || !Number.isSafeInteger(snap.financeRevision)) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.financeRevision invalid', 400);
-  }
-  if (typeof snap.contentRevision !== 'string' || snap.contentRevision.length === 0) {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.contentRevision invalid', 400);
-  }
-
-  const periodStatus = snap.periodStatus;
-  if (periodStatus !== 'active' && periodStatus !== 'completed' && periodStatus !== 'future') {
-    throw new FinancialAssistantError('invalid_request', 'snapshot.periodStatus invalid', 400);
-  }
-
-  return {
-    ...(snap as AiSafeSnapshotWire),
-    schemaVersion: 1,
-    kind: 'ai_safe',
-    snapshotId,
-    snapshotComputedAt,
-    currency,
-    period: { month, year },
-    periodStatus,
-    flags: {
-      hasIncome: Boolean(flags.hasIncome),
-      hasExpenses: Boolean(flags.hasExpenses),
-      transferExcluded: true,
-      insufficientData: Boolean(flags.insufficientData),
-    },
-  };
+  return text;
 }
 
 function validateCategorizePayload(raw: unknown): CategorizeMerchantPayload {
   const payload = assertObject(raw, 'payload');
+  assertOptionalExactKeys(
+    payload,
+    ['merchantLabelRedacted', 'amountBucket', 'candidates'],
+    ['descriptionRedacted', 'paymentMethod'],
+    'payload'
+  );
+
   const merchantLabelRedacted = assertString(payload.merchantLabelRedacted, 'merchantLabelRedacted', 80);
   if (looksUnredacted(merchantLabelRedacted)) {
     throw new FinancialAssistantError(
@@ -160,7 +85,10 @@ function validateCategorizePayload(raw: unknown): CategorizeMerchantPayload {
 
   let paymentMethod: PaymentMethod | undefined;
   if (payload.paymentMethod != null) {
-    if (typeof payload.paymentMethod !== 'string' || !PAYMENT_METHODS.has(payload.paymentMethod as PaymentMethod)) {
+    if (
+      typeof payload.paymentMethod !== 'string' ||
+      !PAYMENT_METHODS.has(payload.paymentMethod as PaymentMethod)
+    ) {
       throw new FinancialAssistantError('invalid_request', 'paymentMethod invalid', 400);
     }
     paymentMethod = payload.paymentMethod as PaymentMethod;
@@ -172,6 +100,7 @@ function validateCategorizePayload(raw: unknown): CategorizeMerchantPayload {
 
   const candidates = payload.candidates.map((item, index) => {
     const row = assertObject(item, `candidates[${index}]`);
+    assertOptionalExactKeys(row, ['categoryId', 'categoryName'], [], `candidates[${index}]`);
     return {
       categoryId: assertString(row.categoryId, `candidates[${index}].categoryId`, 128),
       categoryName: assertString(row.categoryName, `candidates[${index}].categoryName`, 80),
@@ -191,7 +120,7 @@ function validateCategorizePayload(raw: unknown): CategorizeMerchantPayload {
  * Parse and validate the raw HTTP body.
  * Policy: structural invalidity → reject (throw). No silent skip of wire fields.
  */
-export function parseAndValidateRequest(rawBody: string): FinancialAssistantRequest {
+export function parseAndValidateRequest(rawBody: string, nowMs: number): FinancialAssistantRequest {
   if (utf8ByteLength(rawBody) > MAX_REQUEST_UTF8_BYTES) {
     throw new FinancialAssistantError(
       'invalid_request',
@@ -231,6 +160,12 @@ export function parseAndValidateRequest(rawBody: string): FinancialAssistantRequ
   const currency = assertCurrency(body.currency, 'currency');
 
   if (capability === 'monthly_summary' || capability === 'budget_suggestions') {
+    assertOptionalExactKeys(
+      body,
+      ['schemaVersion', 'requestId', 'capability', 'locale', 'currency', 'snapshot'],
+      [],
+      'body'
+    );
     if ('payload' in body) {
       throw new FinancialAssistantError(
         'invalid_request',
@@ -238,13 +173,9 @@ export function parseAndValidateRequest(rawBody: string): FinancialAssistantRequ
         400
       );
     }
-    const snapshot = validateAiSafeSnapshot(body.snapshot);
+    const snapshot = validateAiSafeSnapshot(body.snapshot, nowMs);
     if (snapshot.currency !== currency) {
-      throw new FinancialAssistantError(
-        'invalid_request',
-        'currency must match snapshot.currency',
-        400
-      );
+      throw new FinancialAssistantError('invalid_request', 'currency must match snapshot.currency', 400);
     }
     return {
       schemaVersion: 1,
@@ -256,7 +187,22 @@ export function parseAndValidateRequest(rawBody: string): FinancialAssistantRequ
     };
   }
 
-  // categorize_merchant
+  assertOptionalExactKeys(
+    body,
+    [
+      'schemaVersion',
+      'requestId',
+      'capability',
+      'locale',
+      'currency',
+      'snapshotId',
+      'snapshotComputedAt',
+      'payload',
+    ],
+    [],
+    'body'
+  );
+
   if ('snapshot' in body) {
     throw new FinancialAssistantError(
       'invalid_request',
@@ -272,7 +218,7 @@ export function parseAndValidateRequest(rawBody: string): FinancialAssistantRequ
     locale,
     currency,
     snapshotId: assertUuid(body.snapshotId, 'snapshotId'),
-    snapshotComputedAt: assertIsoDate(body.snapshotComputedAt, 'snapshotComputedAt'),
+    snapshotComputedAt: assertIsoNotFuture(body.snapshotComputedAt, 'snapshotComputedAt', nowMs),
     payload: validateCategorizePayload(body.payload),
   };
 }
@@ -281,4 +227,14 @@ export function isSnapshotStale(snapshotComputedAt: string, nowMs: number): bool
   const computed = Date.parse(snapshotComputedAt);
   if (Number.isNaN(computed)) return true;
   return nowMs - computed > 24 * 60 * 60 * 1000;
+}
+
+export function assertJsonContentType(contentType: string | null): void {
+  if (!contentType) {
+    throw new FinancialAssistantError('invalid_request', 'Content-Type must be application/json', 415);
+  }
+  const media = contentType.split(';')[0].trim().toLowerCase();
+  if (media !== 'application/json') {
+    throw new FinancialAssistantError('invalid_request', 'Content-Type must be application/json', 415);
+  }
 }
