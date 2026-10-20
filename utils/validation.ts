@@ -234,6 +234,10 @@ const backupSettingsSchema = z.object({
   firstDayOfWeek: z.number().int().min(0).max(6),
   monthlyBudget: z.number().int().nullable(),
   onboardingComplete: z.boolean(),
+  // Device-local AI consent is never restored as enabled from a backup.
+  aiCloudEnabled: z.boolean().optional().default(false),
+  aiConsentPolicyVersion: z.number().int().min(0).max(100).optional().default(0),
+  aiConsentAcceptedAt: z.string().nullable().optional().default(null),
 });
 
 export const backupSchema = z.object({

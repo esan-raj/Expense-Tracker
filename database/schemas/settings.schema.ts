@@ -4,7 +4,7 @@ import type { SettingsDoc } from '@/database/types';
 
 export const settingsSchema: RxJsonSchema<SettingsDoc> = {
   title: 'settings',
-  version: 1,
+  version: 2,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -17,6 +17,12 @@ export const settingsSchema: RxJsonSchema<SettingsDoc> = {
     firstDayOfWeek: { type: 'integer', minimum: 0, maximum: 6, multipleOf: 1 },
     monthlyBudget: { type: 'integer', minimum: 0, maximum: 9007199254740991, multipleOf: 1 },
     onboardingComplete: { type: 'boolean' },
+    /** Device-local cloud AI opt-in. Never synced to Supabase profiles. Default false. */
+    aiCloudEnabled: { type: 'boolean' },
+    /** 0 = never accepted; 1 = current Edge consent policy. */
+    aiConsentPolicyVersion: { type: 'integer', minimum: 0, maximum: 100, multipleOf: 1 },
+    /** ISO-8601 when enabled; empty string when disabled. */
+    aiConsentAcceptedAt: { type: 'string', maxLength: 40 },
   },
   required: [
     'id',
@@ -28,5 +34,8 @@ export const settingsSchema: RxJsonSchema<SettingsDoc> = {
     'firstDayOfWeek',
     'monthlyBudget',
     'onboardingComplete',
+    'aiCloudEnabled',
+    'aiConsentPolicyVersion',
+    'aiConsentAcceptedAt',
   ],
 };

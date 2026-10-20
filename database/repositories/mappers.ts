@@ -91,6 +91,9 @@ interface SettingsRow {
   firstDayOfWeek: number;
   monthlyBudget: number | null;
   onboardingComplete: number | boolean;
+  aiCloudEnabled?: boolean;
+  aiConsentPolicyVersion?: number;
+  aiConsentAcceptedAt?: string | null;
 }
 
 export function mapTransaction(row: TransactionRow): Transaction {
@@ -181,6 +184,10 @@ export function mapSettings(row: SettingsRow): AppSettings {
     firstDayOfWeek: row.firstDayOfWeek,
     monthlyBudget: row.monthlyBudget,
     onboardingComplete: Boolean(row.onboardingComplete),
+    aiCloudEnabled: Boolean(row.aiCloudEnabled),
+    aiConsentPolicyVersion:
+      typeof row.aiConsentPolicyVersion === 'number' ? row.aiConsentPolicyVersion : 0,
+    aiConsentAcceptedAt: row.aiConsentAcceptedAt ? String(row.aiConsentAcceptedAt) : null,
   };
 }
 

@@ -11,6 +11,7 @@ import { settingsSchema } from './schemas/settings.schema';
 import { syncQueueSchema } from './schemas/syncQueue.schema';
 import { syncStateSchema } from './schemas/syncState.schema';
 import { investmentSchema } from './schemas/investment.schema';
+import { migrateSettingsToV2 } from './migrations/settingsMigrations';
 import { rxError, rxLog } from './logger';
 import type { SpendWiseCollections, SpendWiseDatabase } from './types';
 
@@ -150,6 +151,8 @@ export async function createSpendWiseDatabase(name = SPENDWISE_DATABASE_NAME): P
             accentPreset: typeof doc.accentPreset === 'string' ? doc.accentPreset : 'emerald',
             accentColor: typeof doc.accentColor === 'string' ? doc.accentColor : '#0E7C66',
           }),
+          /** Existing users remain AI-disabled; consent never auto-enables. */
+          2: (doc) => migrateSettingsToV2(doc),
         },
       },
       investments: { schema: investmentSchema },

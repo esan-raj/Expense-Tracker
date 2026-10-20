@@ -91,6 +91,9 @@ export interface SettingsDoc {
   firstDayOfWeek: number;
   monthlyBudget: number;
   onboardingComplete: boolean;
+  aiCloudEnabled: boolean;
+  aiConsentPolicyVersion: number;
+  aiConsentAcceptedAt: string;
 }
 
 export interface SyncQueueDoc {

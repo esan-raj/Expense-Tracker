@@ -15,7 +15,27 @@ const DEFAULT_SETTINGS: AppSettings = {
   firstDayOfWeek: 1,
   monthlyBudget: null,
   onboardingComplete: false,
+  aiCloudEnabled: false,
+  aiConsentPolicyVersion: 0,
+  aiConsentAcceptedAt: null,
 };
+
+function toDoc(next: AppSettings) {
+  return {
+    id: next.id,
+    currency: next.currency,
+    currencySymbol: next.currencySymbol,
+    theme: next.theme,
+    accentPreset: next.accentPreset,
+    accentColor: next.accentColor,
+    firstDayOfWeek: next.firstDayOfWeek,
+    monthlyBudget: next.monthlyBudget ?? 0,
+    onboardingComplete: next.onboardingComplete,
+    aiCloudEnabled: Boolean(next.aiCloudEnabled),
+    aiConsentPolicyVersion: next.aiConsentPolicyVersion ?? 0,
+    aiConsentAcceptedAt: next.aiConsentAcceptedAt ?? '',
+  };
+}
 
 export const settingsRepository = {
   async get(): Promise<AppSettings> {
@@ -26,6 +46,10 @@ export const settingsRepository = {
     return mapSettings({
       ...json,
       monthlyBudget: json.monthlyBudget || null,
+      aiCloudEnabled: Boolean(json.aiCloudEnabled),
+      aiConsentPolicyVersion:
+        typeof json.aiConsentPolicyVersion === 'number' ? json.aiConsentPolicyVersion : 0,
+      aiConsentAcceptedAt: json.aiConsentAcceptedAt || null,
     });
   },
 
@@ -33,17 +57,7 @@ export const settingsRepository = {
     const current = await this.get();
     const next: AppSettings = { ...current, ...update };
     const db = await getRxDatabase();
-    await db.settings.upsert({
-      id: next.id,
-      currency: next.currency,
-      currencySymbol: next.currencySymbol,
-      theme: next.theme,
-      accentPreset: next.accentPreset,
-      accentColor: next.accentColor,
-      firstDayOfWeek: next.firstDayOfWeek,
-      monthlyBudget: next.monthlyBudget ?? 0,
-      onboardingComplete: next.onboardingComplete,
-    });
+    await db.settings.upsert(toDoc(next));
     return next;
   },
 

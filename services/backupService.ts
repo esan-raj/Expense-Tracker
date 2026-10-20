@@ -25,7 +25,13 @@ export const backupService = {
         recurringTransactions: await recurringRepository.exportAll(),
         accounts: await accountRepository.list(true),
         investments: await investmentRepository.list(),
-        settings: await settingsRepository.get(),
+        settings: await settingsRepository.get().then((settings) => ({
+          ...settings,
+          // Do not export device-local AI consent as enabled.
+          aiCloudEnabled: false,
+          aiConsentPolicyVersion: 0,
+          aiConsentAcceptedAt: null,
+        })),
       };
       await saveAndShare('spendwise-backup.json', JSON.stringify(payload, null, 2), 'application/json');
     } catch (error) {
@@ -80,7 +86,13 @@ export const backupService = {
         }))
       );
       await budgetRepository.replaceAll(payload.budgets);
-      await settingsRepository.replace(payload.settings);
+      // Restore never silently enables cloud AI — consent stays device-local and off.
+      await settingsRepository.replace({
+        ...payload.settings,
+        aiCloudEnabled: false,
+        aiConsentPolicyVersion: 0,
+        aiConsentAcceptedAt: null,
+      });
       await syncService.queueExistingLocal();
       await flushPersistentStorage();
     } catch (error) {

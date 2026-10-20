@@ -66,6 +66,9 @@ export async function seedDefaults(db: SpendWiseDatabase): Promise<void> {
       firstDayOfWeek: 1,
       monthlyBudget: 0,
       onboardingComplete: false,
+      aiCloudEnabled: false,
+      aiConsentPolicyVersion: 0,
+      aiConsentAcceptedAt: '',
     });
   }
 }

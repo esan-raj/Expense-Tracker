@@ -13,6 +13,12 @@ export interface AppSettings {
   firstDayOfWeek: number;
   monthlyBudget: number | null;
   onboardingComplete: boolean;
+  /** Device-local; default false. Not synced to Supabase profiles. */
+  aiCloudEnabled: boolean;
+  /** 0 = never accepted; must be 1 for Edge requests. */
+  aiConsentPolicyVersion: number;
+  /** ISO-8601 when enabled; null when disabled. */
+  aiConsentAcceptedAt: string | null;
 }
 
 export interface SettingsUpdate {
@@ -24,4 +30,7 @@ export interface SettingsUpdate {
   firstDayOfWeek?: number;
   monthlyBudget?: number | null;
   onboardingComplete?: boolean;
+  aiCloudEnabled?: boolean;
+  aiConsentPolicyVersion?: number;
+  aiConsentAcceptedAt?: string | null;
 }

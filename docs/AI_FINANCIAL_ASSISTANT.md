@@ -528,10 +528,20 @@ Exact SKUs and budgets are chosen in Phase 2 provider selection; Phase 1 only re
 | Wire for categorize | Separate redacted merchant payload; server re-checks D4-like patterns |
 | Provider | `FinancialAiProvider` + default `UnavailableFinancialAiProvider` (`FINANCIAL_AI_PROVIDER=unavailable`) — no paid vendor SDK |
 | Limits | 8 KiB request / 16 KiB response UTF-8; best-effort in-memory rate limit (non-durable; deploy blocked until durable limiter designed) |
-| Consent | Per-request `consent: { cloudAi: true, policyVersion: 1 }` required before provider call; persistent settings opt-in UI remains later |
+| Consent | Per-request `consent: { cloudAi: true, policyVersion: 1 }` required before provider call |
 | Cancellation | Cooperative `AbortSignal` + deadline on provider context; adapters must honor signal |
 
-Still **proposed**: deploy, chosen AI provider adapter, client invoke module, AI settings/opt-in UI, response UI, merchant redaction helper on device. Do not send `LocalFinancialSnapshot` on the wire.
+**Phase 4A client boundary (implemented, no deploy / no live provider calls):** `services/aiAssistant/` + Settings → Privacy.
+
+| Piece | Role |
+| --- | --- |
+| Device-local consent | RxDB settings v2: `aiCloudEnabled` / `aiConsentPolicyVersion` / `aiConsentAcceptedAt` — default off; never synced to Supabase profiles; migration never enables |
+| Privacy UI | Disclosure + ConfirmDialog enable + immediate disable (`app/settings/privacy.tsx`) |
+| `redactFinancialText` | Deterministic PII redaction for titles / short descriptions (regex; not a guarantee) |
+| Request builders | Allowlisted `monthly_summary` / `budget_suggestions` / `categorize_merchant` envelopes; local 8 KiB reject |
+| `invokeFinancialAssistant` | DI transport over `supabase.functions.invoke`; consent + session recheck; cancel/timeout; dedupe; late-response ignore — tests use fakes only |
+
+Still **proposed**: Edge deploy, chosen AI provider adapter, AI response UI / chatbot, budget apply confirmations. Do not send `LocalFinancialSnapshot` on the wire.
 
 ---
 

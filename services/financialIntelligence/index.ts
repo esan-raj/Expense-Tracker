@@ -3,6 +3,7 @@ export type {
   AiSafeFinancialSnapshot,
   AiSafeRecurringPattern,
   AiSafeTruncation,
+  AmountBucket,
   AnomalySignal,
   AverageDailyMethod,
   BudgetBaseline,

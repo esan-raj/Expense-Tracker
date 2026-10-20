@@ -163,6 +163,10 @@ export async function migrateJsonSnapshot(db: SpendWiseDatabase): Promise<void> 
         firstDayOfWeek: numberValue(settings.firstDayOfWeek, 1),
         monthlyBudget: numberValue(settings.monthlyBudget),
         onboardingComplete: flag(settings.onboardingComplete),
+        // Device-local AI consent — never inherit enabled from legacy JSON snapshots.
+        aiCloudEnabled: false,
+        aiConsentPolicyVersion: 0,
+        aiConsentAcceptedAt: '',
       });
     }
 
